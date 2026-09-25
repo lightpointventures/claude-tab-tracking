@@ -2078,3 +2078,13 @@ def test_api_key_ignores_environment_inside_plugin(monkeypatch):
     monkeypatch.delenv('CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY')
     monkeypatch.delenv('CLAUDE_PLUGIN_ROOT')
     assert d._api_key() == 'env-key-should-not-be-used'  # manual install keeps the env fallback
+
+
+def test_parse_llm_response_accepts_trailing_done_marker():
+    from dynamic_task_update import parse_llm_response
+    task, done, _ = parse_llm_response('任务：执行精确指定的文本回复指令。[完成]')
+    assert done and task == '执行精确指定的文本回复指令'
+    task, done, _ = parse_llm_response('Ship the release [done]')
+    assert done and task == 'Ship the release'
+    task, done, _ = parse_llm_response('Still working on the parser')
+    assert not done and task == 'Still working on the parser'

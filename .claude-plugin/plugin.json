@@ -1,7 +1,7 @@
 {
   "name": "tabtrack",
-  "version": "1.3.0",
-  "description": "Live task tracking and conversation memory for Claude Code: a per-session [WIP]/[DONE] task line for your statusline, an overview of every live session with /tab:sessions, and daily memos with /tab:memo and /tab:recall.",
+  "version": "1.3.1",
+  "description": "Live task tracking and conversation memory for Claude Code: a per-session [WIP]/[DONE] task line for your statusline, an overview of every live session with /tabtrack:sessions, and daily memos with /tabtrack:memo and /tabtrack:recall.",
   "author": {
     "name": "Lightpoint Ventures",
     "url": "https://github.com/lightpointventures"

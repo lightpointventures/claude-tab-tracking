@@ -315,6 +315,10 @@ Manual install: `./uninstall.sh` (removes the hooks, scripts and commands; keeps
 
 ## Changelog
 
+### 1.3.1 — 2026-09-25
+
+- **Fix: completion marker at the end of the summary** — `[完成]`/`[done]` appended after the task text is now recognized (and stripped) instead of being shown inside the `[WIP]` line. Marketplace description updated to the new command prefix.
+
 ### 1.3.0 — 2026-09-25
 
 - **Renamed: plugin `tab` → `tabtrack`** — Commands are now `/tabtrack:task`, `/tabtrack:memo`, `/tabtrack:recall`, `/tabtrack:sessions`, `/tabtrack:setup`. The install key (`claude-tab-tracking@claude-tab-tracking`), data directory and statusline launcher are unchanged, so existing installs keep working after `claude plugin update`.

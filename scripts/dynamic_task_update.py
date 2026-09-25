@@ -378,6 +378,11 @@ def parse_llm_response(response):
         r'^(\[完成\]\s*|完成\s+|完成：\s*|\[done\]\s*|completed:\s*)',
         '', task_text, flags=re.IGNORECASE
     ).strip()
+    # Models sometimes append the marker instead of prefixing it.
+    trailing = re.search(r'[\s。.]*(\[完成\]|\[done\]|\(done\)|（完成）)\s*$', task, re.IGNORECASE)
+    if trailing:
+        is_done = True
+        task = task[:trailing.start()].rstrip(' 。.')
     return truncate_task(task), is_done, memo
 
 

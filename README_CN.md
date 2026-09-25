@@ -312,6 +312,10 @@ Claude Code 有自己的 auto-memory（每个项目的 `MEMORY.md` 加主题文�
 
 ## 更新日志
 
+### 1.3.1 — 2026-09-25
+
+- **修复：完成标记在句尾** — 摘要把 `[完成]`/`[done]` 放在任务文本末尾时现在也能识别并去掉，不再原样留在 `[WIP]` 行里。市场描述改为新的命令前缀。
+
 ### 1.3.0 — 2026-09-25
 
 - **改名：插件 `tab` → `tabtrack`** — 命令改为 `/tabtrack:task`、`/tabtrack:memo`、`/tabtrack:recall`、`/tabtrack:sessions`、`/tabtrack:setup`。安装名（`claude-tab-tracking@claude-tab-tracking`）、数据目录和状态栏启动器不变，已装用户 `claude plugin update` 后照常使用。
