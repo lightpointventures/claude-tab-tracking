@@ -6,15 +6,21 @@
   },
   "metadata": {
     "description": "Live task tracking and conversation memory for Claude Code sessions",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "plugins": [
     {
       "name": "claude-tab-tracking",
       "source": "./",
-      "description": "Shows what each Claude Code session is working on, right in the statusline, and saves decisions/TODOs from every conversation as daily memos you can search and recall.",
+      "description": "Shows what each Claude Code session is working on, right in the statusline; /tab:sessions lists every live session with its task and running agents; decisions and TODOs from every conversation are saved as daily memos you can search and recall.",
       "category": "productivity",
-      "tags": ["statusline", "session", "task-tracking", "memory", "memos"]
+      "tags": [
+        "statusline",
+        "session",
+        "task-tracking",
+        "memory",
+        "memos"
+      ]
     }
   ]
 }

@@ -29,12 +29,14 @@ When you finish one task and start another, the previous tasks stay visible as d
 
 ## How it works
 
-Three Claude Code hooks work together:
+Five Claude Code hooks work together:
 
 | Hook | What it does |
 |------|-------------|
 | `SessionStart` | Writes `dir [branch]` as the initial label (kept on resume/compact); refreshes the statusline launcher |
 | `Stop` | After each assistant response: reads the transcript, updates the task description, detects completion |
+| `SubagentStop` | Files a finished subagent (type, description, duration) under the current task in today's memo |
+| `Notification` | Optional desktop notification carrying the session's task (off by default) |
 | `SessionEnd` | Cleans up session state files |
 
 Completion is detected from the conversation itself (the summarizer marks a task `[完成]`/done), not from Claude Code's `TaskCompleted` event, which fires for individual background tasks rather than the session.
@@ -145,6 +147,23 @@ cd claude-tab-tracking && ./install.sh
 
 This copies the scripts into `~/.claude/scripts/`, registers the hooks and statusline in `~/.claude/settings.json`, and installs the commands as `/task`, `/memo` and `/recall` (no `tab:` prefix). Do not combine it with the plugin install; `/tab:setup` offers to remove a manual install it finds.
 
+## All sessions at a glance
+
+`/tab:sessions` lists every live Claude Code session on this machine, whether it was started from a terminal or the desktop app:
+
+```
+5 live session(s) · 2 busy
+▶ [busy] plugin release  ·  task-tracking  ·  3m ago
+      [WIP]  Ship the marketplace install and update the README
+      agents 1 running / 6 total
+        ◐ general-purpose: Searching GitHub for tmux/notify repos
+      memo   8 entries today · last: Decide plugin command namespace
+  [idle] GluGlu 项目梳理与进展  ·  xinguanying · desktop  ·  1h10m ago
+      [WIP]  筹备明日 Hillsdale 周边零售门店线下调研走访
+```
+
+Per session: the native session name and busy/idle state (read from Claude Code's own registry in `~/.claude/sessions/`), this plugin's task line, subagents that are still running with their one-line descriptions, and how many memo entries that project has today. `▶` marks the session you ran it from. `/tab:sessions json` prints the same data as JSON; `/tab:sessions all` includes sessions whose process has exited. The underlying script, `scripts/sessions_overview.py`, works standalone too.
+
 ## Conversation memory
 
 The plugin automatically extracts key decisions, conclusions, and TODOs from each conversation and saves them as structured memos.
@@ -159,6 +178,22 @@ After each assistant response (when the conversation has 3+ turns), the plugin e
 - **TODOs** — action items for follow-up
 
 Memos are saved to `~/.claude/memos/{project}/{YYYY-MM-DD}.md`, organized by project and date.
+
+### Subagents in the memo
+
+When a subagent finishes (the `SubagentStop` hook), one bullet is filed under the session's current task:
+
+```
+## 14:02 | Ship the marketplace install
+- 【决策】name the plugin "tab" so commands are /tab:*
+- 【子代理】general-purpose「Research statusline tools on GitHub」 · 4m13s
+```
+
+Agents that ran for less than 15 seconds are skipped. Turn this off with `memo_subagents: false` in `~/.claude/memos/config.yaml`.
+
+### Desktop notifications (optional)
+
+With the plugin's **Desktop notifications** option turned on (`/plugin` → configure, or `claude plugin install … --config notifications=true`), you get a system notification when a session waits for input, needs a permission, or a background agent completes. The notification carries the session's current task, so with several sessions open you know which one wants you. macOS uses `osascript`; Linux uses `notify-send` when present. Off by default.
 
 ### Recalling past context
 
@@ -206,7 +241,10 @@ Plugin layout (marketplace install):
 | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` | Plugin and marketplace manifests |
 | `hooks/hooks.json` | Registers the SessionStart / Stop / SessionEnd hooks |
 | `commands/setup.md` | `/tab:setup`: writes the statusline entry |
-| `commands/task.md`, `memo.md`, `recall.md` | `/tab:task`, `/tab:memo`, `/tab:recall` |
+| `commands/task.md`, `memo.md`, `recall.md`, `sessions.md` | `/tab:task`, `/tab:memo`, `/tab:recall`, `/tab:sessions` |
+| `scripts/sessions_overview.py` | Live-session overview used by `/tab:sessions` |
+| `scripts/subagent_stop.sh` + `subagent_memo.py` | SubagentStop hook: subagent bullets in the memo |
+| `scripts/notify.sh` | Notification hook (opt-in desktop notifications) |
 | `scripts/session_start.sh` | SessionStart hook; also writes the statusline launcher |
 | `scripts/dynamic_task_update.sh` + `.py` | Stop hook: transcript parsing + summarization backends |
 | `scripts/cli_background.py`, `claude_cli_common.py` | Background helper for the Claude Code CLI backend |
@@ -236,6 +274,12 @@ then remove the `statusLine` key from `~/.claude/settings.json` if you set it wi
 Manual install: `./uninstall.sh` (removes the hooks, scripts and commands; keeps your data).
 
 ## Changelog
+
+### 1.1.0 — 2026-09-25
+
+- **New: `/tab:sessions`** — Overview of every live session: native name and busy/idle state, this plugin's task line, running subagents with descriptions, today's memo count. Works across terminal and desktop-app sessions; `json` and `all` arguments.
+- **New: subagents in the memo** — `SubagentStop` files each finished subagent (type, description, duration) under the current task; agents under 15 s are skipped; `memo_subagents: false` disables it.
+- **New: optional desktop notifications** — Plugin option `notifications` (off by default) sends a notification carrying the session's task when it waits for input, needs approval, or a background agent completes.
 
 ### 1.0.0 — 2026-09-25
 

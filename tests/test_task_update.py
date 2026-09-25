@@ -1600,7 +1600,7 @@ def test_plugin_manifests_are_consistent():
 def test_plugin_hooks_reference_existing_scripts():
     import json
     hooks = json.load(open(os.path.join(REPO_DIR, 'hooks', 'hooks.json')))['hooks']
-    assert set(hooks) == {'SessionStart', 'Stop', 'SessionEnd'}  # TaskCompleted = subagent task, not session
+    assert set(hooks) == {'SessionStart', 'Stop', 'SessionEnd', 'SubagentStop', 'Notification'}  # no TaskCompleted: per-task, not per-session
     for event, rules in hooks.items():
         for rule in rules:
             for h in rule['hooks']:
@@ -1713,3 +1713,167 @@ def test_statusline_truncates_cjk_by_character_under_c_locale(tmp_path):
     assert '中' * 57 + '...' in line
     assert '中' * 58 not in line
     assert '\ufffd' not in line  # no broken multibyte sequence
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: sessions overview, subagent memo, notifications
+# ---------------------------------------------------------------------------
+
+def _fake_claude_dir(tmp_path, session_id='sid-ov', pid=None, name='My session', status='busy',
+                     cwd=None, task='WIP:Refactor the parser\nPREV:1:earlier\n', agents=(), memo=None):
+    import json
+    claude = tmp_path / '.claude'
+    (claude / 'sessions').mkdir(parents=True, exist_ok=True)
+    (claude / 'session-tasks').mkdir(exist_ok=True)
+    cwd = cwd or str(tmp_path / 'proj')
+    reg = {'pid': pid if pid is not None else os.getpid(), 'sessionId': session_id, 'cwd': cwd,
+           'startedAt': int(time.time() * 1000) - 600000, 'name': name, 'status': status,
+           'statusUpdatedAt': int(time.time() * 1000) - 5000, 'entrypoint': 'cli', 'kind': 'interactive'}
+    (claude / 'sessions' / f'{reg["pid"]}.json').write_text(json.dumps(reg))
+    if task is not None:
+        (claude / 'session-tasks' / f'{session_id}.txt').write_text(task)
+    proj_dir = claude / 'projects' / re.sub(r'[^A-Za-z0-9]', '-', cwd)
+    (proj_dir / session_id / 'subagents').mkdir(parents=True, exist_ok=True)
+    (proj_dir / f'{session_id}.jsonl').write_text('{}\n')
+    for i, (desc, running) in enumerate(agents):
+        meta = proj_dir / session_id / 'subagents' / f'agent-a{i}.meta.json'
+        meta.write_text(json.dumps({'agentType': 'general-purpose', 'description': desc}))
+        jsonl = proj_dir / session_id / 'subagents' / f'agent-a{i}.jsonl'
+        jsonl.write_text('{}\n')
+        if not running:
+            old = time.time() - 3600
+            os.utime(jsonl, (old, old))
+    if memo:
+        from dynamic_task_update import resolve_project_name
+        mdir = claude / 'memos' / resolve_project_name(cwd)
+        mdir.mkdir(parents=True, exist_ok=True)
+        (mdir / (time.strftime('%Y-%m-%d') + '.md')).write_text(memo)
+    return claude
+
+
+import time
+
+
+def _run_overview(claude_dir, *args):
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(claude_dir), HOME=str(claude_dir.parent))
+    return subprocess.run([sys.executable, os.path.join(SCRIPTS_DIR, 'sessions_overview.py'), *args],
+                          capture_output=True, text=True, timeout=30, env=env)
+
+
+def test_sessions_overview_joins_registry_task_agents_and_memo(tmp_path):
+    (tmp_path / 'proj').mkdir()
+    claude = _fake_claude_dir(tmp_path, agents=[('Search GitHub for repos', True), ('Old finished job', False)],
+                              memo='# today\n\n## 10:00 | Refactor the parser\n- 【决策】use a tokenizer\n')
+    r = _run_overview(claude, '--self', 'sid-ov')
+    assert r.returncode == 0, r.stderr
+    out = r.stdout
+    assert '1 live session(s) · 1 busy' in out
+    assert '▶ [busy] My session' in out and 'proj' in out
+    assert '[WIP]  Refactor the parser' in out
+    assert 'agents 1 running / 2 total' in out
+    assert '◐ general-purpose: Search GitHub for repos' in out
+    assert 'Old finished job' not in out
+    assert 'memo   1 entries today · last: Refactor the parser' in out
+
+
+def test_sessions_overview_hides_dead_sessions_unless_all(tmp_path):
+    (tmp_path / 'proj').mkdir()
+    claude = _fake_claude_dir(tmp_path, session_id='dead', pid=2**22 - 1, name='Gone')
+    r = _run_overview(claude)
+    assert 'No live Claude Code sessions found.' in r.stdout
+    r = _run_overview(claude, '--all')
+    assert 'Gone' in r.stdout
+
+
+def test_sessions_overview_json(tmp_path):
+    import json
+    (tmp_path / 'proj').mkdir()
+    claude = _fake_claude_dir(tmp_path, task='MANUAL:pinned\n')
+    r = _run_overview(claude, '--json')
+    data = json.loads(r.stdout)
+    assert data[0]['badge'] == 'SET' and data[0]['task'] == 'pinned'
+    assert data[0]['session_id'] == 'sid-ov'
+
+
+def _subagent_payload(tmp_path, seconds=120, description='Find auth code', session_id='sid-sa'):
+    import json
+    from datetime import datetime, timedelta
+    sub = tmp_path / 'subagents'
+    sub.mkdir(exist_ok=True)
+    (sub / 'agent-a1.meta.json').write_text(json.dumps({'agentType': 'Explore', 'description': description}))
+    t0 = datetime(2026, 9, 25, 10, 0, 0)
+    lines = [json.dumps({'timestamp': (t0 + timedelta(seconds=s)).strftime('%Y-%m-%dT%H:%M:%S.000Z')})
+             for s in (0, seconds)]
+    (sub / 'agent-a1.jsonl').write_text('\n'.join(lines) + '\n')
+    return {'session_id': session_id, 'agent_id': 'a1', 'agent_type': 'Explore',
+            'agent_transcript_path': str(sub / 'agent-a1.jsonl'), 'cwd': str(tmp_path / 'proj')}
+
+
+def _run_subagent_hook(tmp_path, payload, extra_env=None):
+    import json
+    env = dict(os.environ, HOME=str(tmp_path), **(extra_env or {}))
+    return subprocess.run(['bash', os.path.join(SCRIPTS_DIR, 'subagent_stop.sh')], input=json.dumps(payload),
+                          capture_output=True, text=True, timeout=30, env=env)
+
+
+def test_subagent_stop_files_bullet_under_current_task(tmp_path):
+    from dynamic_task_update import resolve_project_name
+    (tmp_path / 'proj').mkdir()
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    tasks.mkdir(parents=True)
+    (tasks / 'sid-sa.txt').write_text('WIP:Fix the login bug\n')
+    payload = _subagent_payload(tmp_path)
+    r = _run_subagent_hook(tmp_path, payload)
+    assert r.returncode == 0 and r.stdout == ''
+    project = resolve_project_name(str(tmp_path / 'proj'))
+    memo = (tmp_path / '.claude' / 'memos' / project / (time.strftime('%Y-%m-%d') + '.md')).read_text()
+    assert '| Fix the login bug' in memo
+    assert '- 【子代理】Explore「Find auth code」 · 2m00s' in memo
+    # A second agent for the same task merges into the same entry
+    payload2 = _subagent_payload(tmp_path, seconds=45, description='Check tests')
+    payload2['agent_id'] = 'a1'
+    _run_subagent_hook(tmp_path, payload2)
+    memo = (tmp_path / '.claude' / 'memos' / project / (time.strftime('%Y-%m-%d') + '.md')).read_text()
+    assert memo.count('## ') == 1
+    assert '「Check tests」 · 45s' in memo
+
+
+def test_subagent_stop_skips_trivial_agents_and_respects_config(tmp_path):
+    (tmp_path / 'proj').mkdir()
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    tasks.mkdir(parents=True)
+    (tasks / 'sid-sa.txt').write_text('WIP:Fix the login bug\n')
+    memos = tmp_path / '.claude' / 'memos'
+    _run_subagent_hook(tmp_path, _subagent_payload(tmp_path, seconds=5))
+    assert not memos.exists() or not list(memos.rglob('*.md'))
+    memos.mkdir(parents=True, exist_ok=True)
+    (memos / 'config.yaml').write_text('memo_subagents: false\n')
+    _run_subagent_hook(tmp_path, _subagent_payload(tmp_path, seconds=300))
+    assert not list(memos.rglob('*.md'))
+
+
+def test_load_memo_config_parses_memo_subagents(tmp_path):
+    from dynamic_task_update import load_memo_config
+    cfg = tmp_path / 'config.yaml'
+    cfg.write_text('memo_subagents: false\n')
+    assert load_memo_config(str(cfg))['memo_subagents'] is False
+    cfg.write_text('memo_subagents: true\n')
+    assert load_memo_config(str(cfg))['memo_subagents'] is True
+    assert load_memo_config(str(tmp_path / 'missing.yaml'))['memo_subagents'] is True
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_notify_is_silent_unless_enabled(tmp_path):
+    import json
+    payload = {'session_id': 'x', 'notification_type': 'idle_prompt', 'message': 'waiting', 'cwd': '/a/b'}
+    env = dict(os.environ, HOME=str(tmp_path))
+    env.pop('CLAUDE_PLUGIN_OPTION_NOTIFICATIONS', None)
+    env.pop('CLAUDE_TAB_NOTIFY', None)
+    r = subprocess.run(['bash', os.path.join(SCRIPTS_DIR, 'notify.sh')], input=json.dumps(payload),
+                       capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode == 0 and r.stdout == '' and r.stderr == ''
+    # Enabled but no notifier on PATH: still exits 0 quietly
+    env.update(CLAUDE_PLUGIN_OPTION_NOTIFICATIONS='true', PATH='/nonexistent')
+    r = subprocess.run(['/bin/bash', os.path.join(SCRIPTS_DIR, 'notify.sh')], input=json.dumps(payload),
+                       capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode == 0 and r.stdout == ''

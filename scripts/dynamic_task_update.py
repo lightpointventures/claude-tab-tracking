@@ -76,6 +76,7 @@ DEFAULT_CONFIG = {
     'recall_token_budget': 8000,
     'memo_merge_window': 300,
     'memo_merge_threshold': 0.6,
+    'memo_subagents': True,
 }
 
 
@@ -126,6 +127,8 @@ def load_memo_config(config_path=None):
                         config['memo_merge_threshold'] = float(val)
                     except ValueError:
                         pass
+                elif key == 'memo_subagents':
+                    config['memo_subagents'] = val.strip().lower() not in ('false', 'no', '0', 'off')
         if tags:
             config['tags'] = tags
         config['tags_str'] = ''.join(f'【{t}】' for t in config['tags'])

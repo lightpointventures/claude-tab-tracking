@@ -28,12 +28,14 @@
 
 ## 工作原理
 
-三个 Claude Code hooks 协同工作：
+五个 Claude Code hooks 协同工作：
 
 | Hook | 功能 |
 |------|------|
 | `SessionStart` | 写入 `目录 [分支]` 作为初始标签（恢复会话 / 压缩时保留原任务）；刷新状态栏启动器 |
 | `Stop` | 每次助手回复后：读取对话记录，更新任务描述，检测完成状态 |
+| `SubagentStop` | 子代理结束时，把它（类型、描述、用时）记到今日备忘录的当前任务下 |
+| `Notification` | 可选的桌面通知，附带会话当前任务（默认关闭） |
 | `SessionEnd` | 清理会话状态文件 |
 
 完成状态由对话内容判断（摘要器标记 `[完成]`），不使用 Claude Code 的 `TaskCompleted` 事件：该事件针对单个后台任务，而非整个会话。
@@ -142,6 +144,23 @@ cd claude-tab-tracking && ./install.sh
 
 脚本复制到 `~/.claude/scripts/`，hooks 与状态栏写入 `~/.claude/settings.json`，命令安装为 `/task`、`/memo`、`/recall`（无 `tab:` 前缀）。不要与插件安装同时使用；`/tab:setup` 发现手动安装时会提议移除。
 
+## 一眼看全部会话
+
+`/tab:sessions` 列出这台机器上所有活着的 Claude Code 会话，不论是终端还是桌面应用启动的：
+
+```
+5 live session(s) · 2 busy
+▶ [busy] plugin release  ·  task-tracking  ·  3m ago
+      [WIP]  Ship the marketplace install and update the README
+      agents 1 running / 6 total
+        ◐ general-purpose: Searching GitHub for tmux/notify repos
+      memo   8 entries today · last: Decide plugin command namespace
+  [idle] GluGlu 项目梳理与进展  ·  xinguanying · desktop  ·  1h10m ago
+      [WIP]  筹备明日 Hillsdale 周边零售门店线下调研走访
+```
+
+每个会话显示：原生会话名和忙/闲状态（读自 Claude Code 自己的 `~/.claude/sessions/` 注册表）、本插件的任务行、仍在运行的子代理及其一句话描述、该项目今天的备忘录条数。`▶` 标记你当前所在的会话。`/tab:sessions json` 输出 JSON；`/tab:sessions all` 包含进程已退出的会话。底层脚本 `scripts/sessions_overview.py` 也可单独运行。
+
 ## 对话记忆
 
 插件会自动从每次对话中提取关键信息，保存为结构化备忘录。
@@ -156,6 +175,22 @@ cd claude-tab-tracking && ./install.sh
 - **待办** — 后续行动项
 
 备忘录保存在 `~/.claude/memos/{项目名}/{YYYY-MM-DD}.md`，按项目和日期归类。
+
+### 子代理入备忘录
+
+子代理结束时（`SubagentStop` hook），会在当前任务条目下记一条：
+
+```
+## 14:02 | Ship the marketplace install
+- 【决策】name the plugin "tab" so commands are /tab:*
+- 【子代理】general-purpose「Research statusline tools on GitHub」 · 4m13s
+```
+
+运行不到 15 秒的子代理不记。在 `~/.claude/memos/config.yaml` 里设 `memo_subagents: false` 可关闭。
+
+### 桌面通知（可选）
+
+打开插件的 **Desktop notifications** 选项（`/plugin` → configure，或安装时 `claude plugin install … --config notifications=true`）后，会话等待输入、需要授权、或后台代理完成时会弹系统通知。通知里带着该会话的当前任务，同时开着几个会话也知道是哪个在叫你。macOS 用 `osascript`，Linux 有 `notify-send` 则用它。默认关闭。
 
 ### 恢复上下文
 
@@ -203,7 +238,10 @@ cd claude-tab-tracking && ./install.sh
 | `.claude-plugin/plugin.json`、`.claude-plugin/marketplace.json` | 插件与市场清单 |
 | `hooks/hooks.json` | 注册 SessionStart / Stop / SessionEnd hooks |
 | `commands/setup.md` | `/tab:setup`：写入状态栏设置 |
-| `commands/task.md`、`memo.md`、`recall.md` | `/tab:task`、`/tab:memo`、`/tab:recall` |
+| `commands/task.md`、`memo.md`、`recall.md`、`sessions.md` | `/tab:task`、`/tab:memo`、`/tab:recall`、`/tab:sessions` |
+| `scripts/sessions_overview.py` | `/tab:sessions` 使用的会话总览脚本 |
+| `scripts/subagent_stop.sh` + `subagent_memo.py` | SubagentStop hook：子代理写入备忘录 |
+| `scripts/notify.sh` | Notification hook（可选桌面通知） |
 | `scripts/session_start.sh` | SessionStart hook；同时生成状态栏启动器 |
 | `scripts/dynamic_task_update.sh` + `.py` | Stop hook：对话解析 + 摘要后端 |
 | `scripts/cli_background.py`、`claude_cli_common.py` | Claude Code CLI 后端的后台执行脚本 |
@@ -233,6 +271,12 @@ cd claude-tab-tracking && ./install.sh
 手动安装：`./uninstall.sh`（移除 hooks、脚本和命令，保留数据）。
 
 ## 更新日志
+
+### 1.1.0 — 2026-09-25
+
+- **新增：`/tab:sessions`** — 所有活跃会话总览：原生会话名与忙/闲、本插件任务行、运行中的子代理及描述、今日备忘录条数。终端与桌面应用会话都能看到；支持 `json` 和 `all` 参数。
+- **新增：子代理入备忘录** — `SubagentStop` 把每个结束的子代理（类型、描述、用时）记到当前任务下；不足 15 秒的跳过；`memo_subagents: false` 关闭。
+- **新增：可选桌面通知** — 插件选项 `notifications`（默认关）：会话等待输入、需要授权或后台代理完成时弹通知，附带该会话的任务。
 
 ### 1.0.0 — 2026-09-25
 
