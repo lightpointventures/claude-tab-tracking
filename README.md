@@ -305,6 +305,10 @@ Manual install: `./uninstall.sh` (removes the hooks, scripts and commands; keeps
 
 ## Changelog
 
+### 1.2.1 — 2026-09-25
+
+- **Fix: auto-memory pointer for home and temp directories** — the hook named the project after the directory while memos use `general` there, so the pointer was never added.
+
 ### 1.2.0 — 2026-09-25
 
 - **New: scored, budgeted recall** — `/tab:recall` now runs `memo_recall.py`: entries are scored by tag weight, per-tag half-life, source (hand-written vs hook-written) and status (superseded decisions, closed TODOs), the best ones are loaded within `recall_token_budget`, and the rest are listed as an index to fetch by id (`show`). `index` lists without loading; `add` files a 【手记】 note.

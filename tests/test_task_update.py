@@ -2053,3 +2053,15 @@ def test_memory_md_pointer_added_once_and_only_when_memos_exist(tmp_path):
     memory_md.write_text('# Memory Index\n')
     _run_hook('session_start.sh', payload, tmp_path)
     assert 'claude-tab-tracking' not in memory_md.read_text()
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_memory_md_pointer_uses_general_for_home_dir(tmp_path):
+    """Home is project "general" in Python; the bash side must agree or the pointer never lands."""
+    encoded = re.sub(r'[^A-Za-z0-9]', '-', str(tmp_path))
+    memory_md = tmp_path / '.claude' / 'projects' / encoded / 'memory' / 'MEMORY.md'
+    memory_md.parent.mkdir(parents=True)
+    memory_md.write_text('# Memory Index\n')
+    (tmp_path / '.claude' / 'memos' / 'general').mkdir(parents=True)
+    _run_hook('session_start.sh', {'session_id': 'm2', 'cwd': str(tmp_path), 'source': 'startup'}, tmp_path)
+    assert '~/.claude/memos/general/' in memory_md.read_text()

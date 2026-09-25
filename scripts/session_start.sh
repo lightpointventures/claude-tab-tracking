@@ -97,7 +97,11 @@ if [ "$SOURCE" = "startup" ] && ! config_off memory_pointer; then
   ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || echo "$CWD")
   ENCODED=$(printf '%s' "$ROOT" | sed 's/[^A-Za-z0-9]/-/g')
   MEMORY_MD="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/${ENCODED}/memory/MEMORY.md"
-  PROJECT_NAME=$(basename "$ROOT" | sed 's/[^A-Za-z0-9_-]/-/g' | tr '[:upper:]' '[:lower:]' | cut -c1-50)
+  # Same naming rule as resolve_project_name(): home and temp dirs are "general".
+  case "$(cd "$ROOT" 2>/dev/null && pwd -P)" in
+    "$(cd "$HOME" && pwd -P)"|/tmp*|/private/tmp*|/var*) PROJECT_NAME="general" ;;
+    *) PROJECT_NAME=$(basename "$ROOT" | sed 's/[^A-Za-z0-9_-]/-/g' | tr '[:upper:]' '[:lower:]' | cut -c1-50) ;;
+  esac
   if [ -f "$MEMORY_MD" ] && [ -d "$HOME/.claude/memos/$PROJECT_NAME" ] \
      && ! grep -q 'Conversation memos (claude-tab-tracking)' "$MEMORY_MD" 2>/dev/null; then
     printf '%s\n' "- Conversation memos (claude-tab-tracking): per-day decisions/TODOs for this project are in ~/.claude/memos/${PROJECT_NAME}/; load with /tab:recall, browse with /tab:memo" >> "$MEMORY_MD"
