@@ -77,9 +77,17 @@ fi
 
 mkdir -p "$TASKS_DIR"
 
-# Call the Python helper script
-PYTHON3="/usr/bin/python3"
-[ -x "$PYTHON3" ] || PYTHON3=$(command -v python3 2>/dev/null || true)
+# Call the Python helper script. Prefer a fixed interpreter path over
+# whatever `python3` resolves to, so shims and virtualenvs on PATH cannot
+# intercept the call. Errors are recorded in ~/.claude/session-tasks/_errors.log.
+PYTHON3=""
+for candidate in /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+  if [ -x "$candidate" ]; then
+    PYTHON3="$candidate"
+    break
+  fi
+done
+[ -z "$PYTHON3" ] && PYTHON3=$(command -v python3 2>/dev/null || true)
 [ -z "$PYTHON3" ] && finish_ok
 "$PYTHON3" "$HOME/.claude/scripts/dynamic_task_update.py" "$TRANSCRIPT" "$TASK_FILE" >/dev/null 2>&1 || true
 

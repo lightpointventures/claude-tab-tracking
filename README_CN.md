@@ -107,7 +107,7 @@ apt install jq   # Debian/Ubuntu
 
 然后：
 ```bash
-git clone https://github.com/lighthouse-strategy/claude-tab-tracking.git
+git clone https://github.com/lightpointventures/claude-tab-tracking.git
 cd claude-tab-tracking && ./install.sh
 ```
 
@@ -173,6 +173,8 @@ cd claude-tab-tracking && ./install.sh
 | `~/.claude/scripts/dynamic_task_update.sh` | Stop hook（bash 封装） |
 | `~/.claude/scripts/dynamic_task_update.py` | Stop hook（对话解析 + LLM 摘要） |
 | `~/.claude/scripts/cli_background.py` | Claude Code CLI 后端的后台执行脚本 |
+| `~/.claude/scripts/claude_cli_common.py` | `claude -p` 调用的公共封装 |
+| `~/.claude/scripts/memo_search.py` | 备忘录全文搜索（`/memo search`） |
 | `~/.claude/scripts/task_completed.sh` | TaskCompleted hook |
 | `~/.claude/scripts/session_statusline.sh` | 状态栏渲染 |
 | `~/.claude/scripts/session_end.sh` | SessionEnd 清理 |
@@ -180,6 +182,7 @@ cd claude-tab-tracking && ./install.sh
 | `~/.claude/commands/memo.md` | `/memo` 命令 |
 | `~/.claude/commands/recall.md` | `/recall` 命令 |
 | `~/.claude/session-tasks/` | 会话状态（7 天后自动清理） |
+| `~/.claude/session-tasks/_errors.log` | 后端失败记录（hook 本身永远不会报错） |
 | `~/.claude/memos/` | 对话备忘录（按项目/日期归类） |
 
 ## 卸载
@@ -189,6 +192,8 @@ rm -f ~/.claude/scripts/session_start.sh \
       ~/.claude/scripts/dynamic_task_update.sh \
       ~/.claude/scripts/dynamic_task_update.py \
       ~/.claude/scripts/cli_background.py \
+      ~/.claude/scripts/claude_cli_common.py \
+      ~/.claude/scripts/memo_search.py \
       ~/.claude/scripts/task_completed.sh \
       ~/.claude/scripts/session_statusline.sh \
       ~/.claude/scripts/session_end.sh \
@@ -205,8 +210,17 @@ rm -rf ~/.claude/memos/
 
 ### 2026-09-25
 
-- **修复:CLI 后端从未运行(session 一直停在 `[---]`/INIT)** — `CLAUDE_TAB_SKIP_HOOK` 防递归检查原本写在 `dynamic_task_update.py` 的模块 import 阶段,而 `cli_background.py` 恰好带着该变量启动并 import 这个模块,导致 helper 在调用 `claude -p` 之前就退出。没有 `ANTHROPIC_API_KEY` 也没有 Ollama 的机器上,任务更新和 memo 都静默失效。检查已移入 `main()`,并补了回归测试。
-- **修复:Stop hook 输出** — `dynamic_task_update.sh` 所有退出路径统一输出 `{"continue":true,"suppressOutput":true}`,固定 hook 环境的 `PATH`,并吞掉 Python stderr,后端失败不再冒泡成 hook 报错。
+- **修复：CLI 后端从未运行（session 一直停在 `[---]`）** — `CLAUDE_TAB_SKIP_HOOK` 防递归检查原本写在 `dynamic_task_update.py` 的 import 阶段，而后台 helper 恰好带着该变量启动并 import 这个模块，导致它在调用 `claude -p` 之前就退出。没有 `ANTHROPIC_API_KEY` 也没有 Ollama 的机器上，任务更新和备忘录都静默失效。检查已移入 `main()`。
+- **修复：CLI 失败时状态栏不更新** — `claude -p` 失败、超时或返回未登录提示时，helper 改为写入关键词摘要，而不是保留旧描述。失败原因记录在 `~/.claude/session-tasks/_errors.log`。
+- **修复：后台结果乱序** — 每次 Stop hook 写入一个代次标记，上一轮较慢的 helper 不会再覆盖较新的结果；helper 运行期间用户执行 `/task` 锁定的描述也会被保留。
+- **修复：注入消息污染摘要** — 读取对话记录时跳过斜杠命令回显、`<system-reminder>` 块、任务通知、子代理消息和被中断的请求，它们不会再成为「第一条用户消息」锚点。
+- **修复：resume / compact 重置任务** — `SessionStart` 在恢复会话、`/clear` 和自动压缩时也会触发；现在只在全新启动或任务文件不存在时写占位符，备忘录概览也只在启动时输出。
+- **修复：`session_start.sh` 整数报错** — 没有条目的备忘录文件会在 stderr 产生 `integer expression expected`。
+- **修复：Stop hook 输出** — `dynamic_task_update.sh` 所有退出路径统一输出 `{"continue":true,"suppressOutput":true}`，并固定 `PATH`。
+- **改进：状态栏** — 优先使用 Claude Code 提供的 `context_window.used_percentage`（保留 token 计数回退），显示模型名，任务文本用 `printf` 原样输出反斜杠，输入异常时不再刷 stderr。
+- **改进：安装脚本** — 重复运行 `install.sh` 不会再给已用绝对路径注册的 hook 添加重复项，并会打印将使用的摘要后端。`uninstall.sh` 补上 `memo_search.py` 和 `claude_cli_common.py`，解释器选择逻辑与安装脚本一致。
+- **改进：附属文件清理** — `.lock` / `.gen` 文件在会话结束时删除，并纳入 7 天清理。
+- **测试** — 125 个测试，包含在临时 `HOME` 下对每个 shell hook 的端到端运行。
 
 ### 2026-03-22
 
@@ -228,7 +242,7 @@ rm -rf ~/.claude/memos/
 
 ## 作者
 
-由 [lighthouse-strategy](https://github.com/lighthouse-strategy) 构建
+由 [Lightpoint Ventures](https://github.com/lightpointventures) 构建
 
 ## 许可证
 

@@ -3,7 +3,7 @@
 Reads Claude Code transcript JSONL and generates a one-line task summary.
 
 Summarization backends (set CLAUDE_TAB_BACKEND to choose):
-  "auto"    — try all backends in order: claude-cli → api → ollama → keywords (default)
+  "auto"    — try all backends in order: api → ollama → claude-cli → keywords (default)
   "cli"     — Claude Code CLI only (uses your Max subscription, no API key needed)
   "api"     — Claude API only (requires ANTHROPIC_API_KEY)
   "ollama"  — Ollama only (requires local server on port 11434)
@@ -35,6 +35,38 @@ from claude_cli_common import build_claude_cli_cmd
 
 MEMO_BASE_DIR = os.path.join(str(pathlib.Path.home()), '.claude', 'memos')
 MEMO_CONFIG_PATH = os.path.join(MEMO_BASE_DIR, 'config.yaml')
+TASKS_DIR = os.path.join(str(pathlib.Path.home()), '.claude', 'session-tasks')
+ERROR_LOG = os.path.join(TASKS_DIR, '_errors.log')
+ERROR_LOG_MAX_BYTES = 256 * 1024
+MAX_TASK_LEN = 60
+
+
+def log_error(message):
+    """Append a timestamped line to the error log. Never raises.
+
+    Hooks run with stdout/stderr discarded, so this file is the only place a
+    backend failure becomes visible. The log is truncated when it grows past
+    ERROR_LOG_MAX_BYTES.
+    """
+    try:
+        os.makedirs(os.path.dirname(ERROR_LOG), exist_ok=True)
+        try:
+            if os.path.getsize(ERROR_LOG) > ERROR_LOG_MAX_BYTES:
+                os.remove(ERROR_LOG)
+        except OSError:
+            pass
+        with open(ERROR_LOG, 'a', encoding='utf-8') as f:
+            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except Exception:
+        pass
+
+
+def truncate_task(task, limit=MAX_TASK_LEN):
+    """Clamp a task description to *limit* characters with an ellipsis."""
+    task = task.strip()
+    if len(task) > limit:
+        return task[:limit - 3] + '...'
+    return task
 
 DEFAULT_CONFIG = {
     'tags': ['决策', '数据', '结论', 'TODO'],
@@ -213,6 +245,36 @@ def extract_text(content):
     return ''
 
 
+# Text injected by Claude Code itself rather than typed by the user. These
+# entries carry no information about the task and would otherwise become the
+# "first user message" anchor for the summarizers.
+_INJECTED_PREFIXES = (
+    '<command-name>', '<command-message>', '<local-command-stdout>',
+    '<local-command-caveat>', '<task-notification>', '<system-reminder>',
+    '<ide_selection>', '<ide_opened_file>', '[Request interrupted',
+)
+_SYSTEM_REMINDER_RE = re.compile(r'<system-reminder>.*?</system-reminder>', re.DOTALL)
+
+
+def _is_injected_entry(obj):
+    """True for transcript entries that were not authored by the user or model."""
+    if obj.get('isMeta') or obj.get('isSidechain') or obj.get('isCompactSummary'):
+        return True
+    if obj.get('parent_tool_use_id'):
+        return True
+    return False
+
+
+def clean_user_text(content):
+    """Strip system-reminder blocks; return '' for injected messages."""
+    content = _SYSTEM_REMINDER_RE.sub('', content).strip()
+    if not content:
+        return ''
+    if content.startswith(_INJECTED_PREFIXES):
+        return ''
+    return content
+
+
 def parse_transcript(path):
     """Parse transcript JSONL. Returns list of {'role', 'content'} dicts."""
     messages = []
@@ -228,6 +290,8 @@ def parse_transcript(path):
                     continue
 
                 role = content = None
+                if _is_injected_entry(obj):
+                    continue
                 if obj.get('type') in ('user', 'assistant'):
                     role = obj['type']
                     content = extract_text(obj.get('message', obj).get('content', ''))
@@ -237,8 +301,10 @@ def parse_transcript(path):
 
                 if not role or not content:
                     continue
-                if role == 'user' and (content.startswith('/') or len(content) <= 3):
-                    continue
+                if role == 'user':
+                    content = clean_user_text(content)
+                    if not content or content.startswith('/') or len(content) <= 3:
+                        continue
 
                 messages.append({'role': role, 'content': content})
     except Exception:
@@ -308,9 +374,7 @@ def parse_llm_response(response):
         r'^(\[完成\]\s*|完成\s+|完成：\s*|\[done\]\s*|completed:\s*)',
         '', task_text, flags=re.IGNORECASE
     ).strip()
-    if len(task) > 60:
-        task = task[:57] + '...'
-    return task, is_done, memo
+    return truncate_task(task), is_done, memo
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +384,8 @@ def parse_llm_response(response):
 CLAUDE_CLI_TIMEOUT = 60
 
 
-def claude_cli_summarize(messages, task_file_path=None, memo_base_dir=None, project_name=None, min_turns=3, tags=None):
+def claude_cli_summarize(messages, task_file_path=None, memo_base_dir=None, project_name=None,
+                         min_turns=3, tags=None, fallback=None):
     """Call claude CLI in print mode, asynchronously.
 
     Because ``claude -p`` has ~30s startup overhead, this backend spawns the
@@ -349,24 +414,64 @@ def claude_cli_summarize(messages, task_file_path=None, memo_base_dir=None, proj
         return parse_llm_response(text)
 
     # Async path — fire-and-forget background process
-    _launch_cli_background(prompt, task_file_path, memo_base_dir, project_name)
+    _launch_cli_background(prompt, task_file_path, memo_base_dir, project_name, fallback=fallback)
     return None  # signal: handled async, caller should not write
 
 
 _CLI_HELPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cli_background.py')
 
 
-def _launch_cli_background(prompt, task_file_path, memo_base_dir=None, project_name=None):
-    """Spawn a detached process that calls claude CLI and writes the result."""
-    import tempfile
-    # Write prompt to a temp file so the helper can read it safely
-    fd, prompt_path = tempfile.mkstemp(prefix='claude_tab_', suffix='.txt')
-    with os.fdopen(fd, 'w', encoding='utf-8') as f:
-        f.write(prompt)
+def generation_path(task_file_path):
+    return task_file_path + '.gen'
 
-    args = [sys.executable, _CLI_HELPER, prompt_path, task_file_path]
-    if memo_base_dir and project_name:
-        args.extend([memo_base_dir, project_name])
+
+def write_generation(task_file_path):
+    """Record a new generation token for *task_file_path* and return it.
+
+    Every Stop hook launches a fresh background helper. When the user sends
+    several messages quickly, older helpers may finish after newer ones; the
+    token lets a helper detect that it has been superseded and skip its write.
+    """
+    token = str(time.time_ns())
+    try:
+        with open(generation_path(task_file_path), 'w', encoding='utf-8') as f:
+            f.write(token)
+    except OSError:
+        pass
+    return token
+
+
+def read_generation(task_file_path):
+    try:
+        with open(generation_path(task_file_path), 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+
+def _launch_cli_background(prompt, task_file_path, memo_base_dir=None, project_name=None,
+                           fallback=None):
+    """Spawn a detached process that calls claude CLI and writes the result.
+
+    *fallback* is an optional ``(task, is_done)`` pair, normally from
+    keyword_fallback(), written by the helper if the CLI call fails so the
+    statusline never stays stale because of a backend error.
+    """
+    import tempfile
+    job = {
+        'prompt': prompt,
+        'task_file': task_file_path,
+        'generation': write_generation(task_file_path),
+        'memo_base_dir': memo_base_dir,
+        'project_name': project_name,
+        'fallback_task': fallback[0] if fallback else None,
+        'fallback_done': bool(fallback[1]) if fallback else False,
+    }
+    fd, job_path = tempfile.mkstemp(prefix='claude_tab_', suffix='.json')
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+        json.dump(job, f, ensure_ascii=False)
+
+    args = [sys.executable, _CLI_HELPER, job_path]
 
     env = os.environ.copy()
     env['CLAUDE_TAB_SKIP_HOOK'] = '1'
@@ -518,7 +623,7 @@ def keyword_fallback(messages):
     if not user_msgs:
         return None, False, ''
     # Use first user message as task anchor (original intent), truncated
-    task_desc = re.sub(r'\s+', ' ', user_msgs[0]).strip()[:70]
+    task_desc = truncate_task(re.sub(r'\s+', ' ', user_msgs[0]))
     # Check the last 3 assistant messages for completion signals
     recent_asst = [m.lower() for m in asst_msgs[-3:]]
     kw_hits = sum(1 for msg in recent_asst for kw in COMPLETION_KEYWORDS if kw in msg)
@@ -678,12 +783,12 @@ def write_memo(memo_content, task_desc, project_name, memo_base_dir=None, merge_
     if HAS_FCNTL:
         lock_path = memo_file + '.lock'
         with open(lock_path, 'w') as lock_f:
+            # Blocking lock: writes are tiny, and skipping would silently drop a memo.
+            fcntl.flock(lock_f, fcntl.LOCK_EX)
             try:
-                fcntl.flock(lock_f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                return  # another process is writing, skip
-            _do_write()
-            fcntl.flock(lock_f, fcntl.LOCK_UN)
+                _do_write()
+            finally:
+                fcntl.flock(lock_f, fcntl.LOCK_UN)
     else:
         _do_write()
 
@@ -806,6 +911,7 @@ def main():
             if backend is claude_cli_summarize:
                 cwd = os.environ.get('PWD', os.getcwd())
                 project = resolve_project_name(cwd)
+                kw_task, kw_done, _ = keyword_fallback(messages)
                 result = backend(
                     messages,
                     task_file_path=task_file_path,
@@ -813,6 +919,7 @@ def main():
                     project_name=project,
                     min_turns=memo_config['min_turns'],
                     tags=memo_config['tags_str'],
+                    fallback=(kw_task, kw_done) if kw_task else None,
                 )
                 if result is None:
                     # CLI backend launched async — it will write the file itself
@@ -833,7 +940,12 @@ def main():
                 )
             if task_desc:
                 break
-        except Exception:
+        except OSError:
+            # Expected: no API key (EnvironmentError) or Ollama not listening
+            # (URLError / ConnectionRefusedError). Fall through to the next backend.
+            continue
+        except Exception as exc:
+            log_error(f"backend {backend.__name__} failed: {type(exc).__name__}: {exc}")
             continue
 
     if not task_desc:

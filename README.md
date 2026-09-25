@@ -110,7 +110,7 @@ apt install jq   # Debian/Ubuntu
 
 Then:
 ```bash
-git clone https://github.com/lighthouse-strategy/claude-tab-tracking.git
+git clone https://github.com/lightpointventures/claude-tab-tracking.git
 cd claude-tab-tracking && ./install.sh
 ```
 
@@ -176,6 +176,8 @@ This writes a `MANUAL:` prefix that pins the description and stops auto-updates 
 | `~/.claude/scripts/dynamic_task_update.sh` | Stop hook (bash wrapper) |
 | `~/.claude/scripts/dynamic_task_update.py` | Stop hook (transcript parser + LLM summarization) |
 | `~/.claude/scripts/cli_background.py` | Background helper for Claude Code CLI backend |
+| `~/.claude/scripts/claude_cli_common.py` | Shared `claude -p` invocation helpers |
+| `~/.claude/scripts/memo_search.py` | Full-text memo search (`/memo search`) |
 | `~/.claude/scripts/task_completed.sh` | TaskCompleted hook |
 | `~/.claude/scripts/session_statusline.sh` | Statusline renderer |
 | `~/.claude/scripts/session_end.sh` | SessionEnd cleanup |
@@ -183,6 +185,7 @@ This writes a `MANUAL:` prefix that pins the description and stops auto-updates 
 | `~/.claude/commands/memo.md` | `/memo` slash command |
 | `~/.claude/commands/recall.md` | `/recall` slash command |
 | `~/.claude/session-tasks/` | Session state (auto-cleaned after 7 days) |
+| `~/.claude/session-tasks/_errors.log` | Backend failures, if any (hooks themselves never fail) |
 | `~/.claude/memos/` | Conversation memos (organized by project/date) |
 
 ## Uninstall
@@ -192,6 +195,8 @@ rm -f ~/.claude/scripts/session_start.sh \
       ~/.claude/scripts/dynamic_task_update.sh \
       ~/.claude/scripts/dynamic_task_update.py \
       ~/.claude/scripts/cli_background.py \
+      ~/.claude/scripts/claude_cli_common.py \
+      ~/.claude/scripts/memo_search.py \
       ~/.claude/scripts/task_completed.sh \
       ~/.claude/scripts/session_statusline.sh \
       ~/.claude/scripts/session_end.sh \
@@ -211,8 +216,17 @@ cd claude-tab-tracking && ./uninstall.sh
 
 ### 2026-09-25
 
-- **Fix: CLI backend never ran (sessions stuck at `[---]`/INIT)** — The `CLAUDE_TAB_SKIP_HOOK` recursion guard lived at module import time in `dynamic_task_update.py`, but `cli_background.py` is launched with that variable set and imports the module, so the helper exited before calling `claude -p`. On machines without `ANTHROPIC_API_KEY` or Ollama this silently disabled task updates and memos. Guard moved into `main()`; regression tests added.
-- **Fix: Stop hook output** — `dynamic_task_update.sh` now prints `{"continue":true,"suppressOutput":true}` on every exit path, pins a sane `PATH` for hook environments, and swallows Python stderr so a backend failure can never surface as a hook error.
+- **Fix: CLI backend never ran (sessions stuck at `[---]`)** — The `CLAUDE_TAB_SKIP_HOOK` recursion guard ran at import time in `dynamic_task_update.py`, but the background helper is launched with that variable set and imports the module, so it exited before calling `claude -p`. On machines without `ANTHROPIC_API_KEY` or Ollama this silently disabled task updates and memos. The guard now lives in `main()`.
+- **Fix: stale statusline on CLI failure** — If `claude -p` fails, times out, or returns a login banner, the helper now falls back to the keyword summary instead of leaving the previous description in place. Failures are recorded in `~/.claude/session-tasks/_errors.log`.
+- **Fix: out-of-order background results** — Each Stop hook stamps a generation token; a slower helper from an earlier turn no longer overwrites a newer result. Helpers also respect a `/task` pin set while they were running.
+- **Fix: injected transcript entries polluted summaries** — Slash-command echoes, `<system-reminder>` blocks, task notifications, subagent messages and interrupted requests are now skipped when reading the transcript, so they can no longer become the "first user message" anchor.
+- **Fix: resume/compact reset the task** — `SessionStart` fires on resume, `/clear` and auto-compact; the placeholder is now written only on a fresh start or when no task file exists. The memo overview is printed only on startup.
+- **Fix: `session_start.sh` integer error** — Memo files with zero entries produced `integer expression expected` on stderr.
+- **Fix: Stop hook output** — `dynamic_task_update.sh` prints `{"continue":true,"suppressOutput":true}` on every exit path and pins a sane `PATH`.
+- **Improvement: statusline** — Uses `context_window.used_percentage` when Claude Code provides it (token-count fallback kept), shows the model name, renders task text with `printf` so backslashes are shown verbatim, and stays quiet on malformed input.
+- **Improvement: installer** — Re-running `install.sh` no longer duplicates hooks that were registered with absolute paths; it prints which summarization backend will be used. `uninstall.sh` now removes `memo_search.py` and `claude_cli_common.py` and uses the same interpreter resolution as the installer.
+- **Improvement: sidecar cleanup** — `.lock`/`.gen` files are removed at session end and swept with the 7-day cleanup.
+- **Tests** — 125 tests, including end-to-end runs of every shell hook against a temporary `HOME`.
 
 ### 2026-03-26
 
@@ -248,7 +262,7 @@ cd claude-tab-tracking && ./uninstall.sh
 
 ## Author
 
-Built by [lighthouse-strategy](https://github.com/lighthouse-strategy)
+Built by [Lightpoint Ventures](https://github.com/lightpointventures)
 
 ## License
 

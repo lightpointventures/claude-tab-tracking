@@ -1,8 +1,10 @@
 #!/bin/bash
 # TaskCompleted hook: marks session task as DONE (strong completion signal)
 
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+
 INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 
 if [ -z "$SESSION_ID" ]; then
   exit 0
@@ -22,6 +24,11 @@ DESC="${DESC#DONE:}"
 DESC="${DESC#MANUAL:}"
 DESC="${DESC#INIT:}"
 DESC=$(echo "$DESC" | tr -d '\n')
+
+# Nothing meaningful to mark as done yet
+if [ -z "$DESC" ]; then
+  exit 0
+fi
 
 # Write DONE status, preserving all PREV lines (up to 3)
 {

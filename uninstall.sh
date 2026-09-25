@@ -13,7 +13,15 @@ SETTINGS="$CLAUDE_DIR/settings.json"
 echo "Uninstalling claude-tab-tracking..."
 
 # --- Check dependencies ---
-if ! command -v python3 &>/dev/null; then
+PYTHON3=""
+for candidate in /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+  if [ -x "$candidate" ]; then
+    PYTHON3="$candidate"
+    break
+  fi
+done
+[ -z "$PYTHON3" ] && PYTHON3=$(command -v python3 2>/dev/null || true)
+if [ -z "$PYTHON3" ]; then
   echo "Error: python3 is required for settings.json cleanup."
   exit 1
 fi
@@ -24,6 +32,7 @@ SCRIPT_FILES=(
   "cli_background.py"
   "dynamic_task_update.py"
   "dynamic_task_update.sh"
+  "memo_search.py"
   "session_end.sh"
   "session_start.sh"
   "session_statusline.sh"
@@ -58,8 +67,8 @@ if [ -f "$SETTINGS" ]; then
   # Backup before modifying
   cp "$SETTINGS" "${SETTINGS}.bak-$(date +%Y%m%d%H%M%S)"
 
-  python3 - "$SETTINGS" << 'PYEOF'
-import json, sys
+  "$PYTHON3" - "$SETTINGS" << 'PYEOF'
+import json, os, sys
 
 path = sys.argv[1]
 try:
@@ -69,13 +78,17 @@ except (json.JSONDecodeError, FileNotFoundError):
     print("Warning: could not parse settings.json, skipping hook removal.", file=sys.stderr)
     sys.exit(0)
 
-# Commands registered by install.sh
-OUR_COMMANDS = {
-    "~/.claude/scripts/session_start.sh",
-    "~/.claude/scripts/dynamic_task_update.sh",
-    "~/.claude/scripts/task_completed.sh",
-    "~/.claude/scripts/session_end.sh",
+# Scripts registered by install.sh (matched by file name, so absolute and
+# tilde-prefixed paths are both recognised)
+OUR_SCRIPTS = {
+    "session_start.sh",
+    "dynamic_task_update.sh",
+    "task_completed.sh",
+    "session_end.sh",
 }
+
+def script_name(command):
+    return os.path.basename(command.split()[0]) if command.strip() else ""
 
 hooks = d.get("hooks", {})
 changed = False
@@ -84,7 +97,7 @@ for event in list(hooks.keys()):
     rules = hooks[event]
     new_rules = []
     for rule in rules:
-        new_hooks = [h for h in rule.get("hooks", []) if h.get("command", "") not in OUR_COMMANDS]
+        new_hooks = [h for h in rule.get("hooks", []) if script_name(h.get("command", "")) not in OUR_SCRIPTS]
         if new_hooks:
             rule["hooks"] = new_hooks
             new_rules.append(rule)

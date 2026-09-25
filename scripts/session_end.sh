@@ -1,9 +1,12 @@
 #!/bin/bash
-# SessionEnd hook: removes cwd lookup file when session terminates
+# SessionEnd hook: removes cwd lookup file when session terminates.
+# Must stay fast: SessionEnd hooks share a ~1.5s budget.
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
 INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
-CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
 
 if [ -z "$CWD" ]; then
   exit 0
@@ -17,11 +20,17 @@ cwd_hash() {
   fi
 }
 CWD_HASH=$(cwd_hash "$CWD")
-LOOKUP="$HOME/.claude/session-tasks/current_${CWD_HASH}.txt"
+TASKS_DIR="$HOME/.claude/session-tasks"
+LOOKUP="$TASKS_DIR/current_${CWD_HASH}.txt"
 
 # Only remove if this session owns the lookup (not a different session)
 if [ -f "$LOOKUP" ] && [ "$(cat "$LOOKUP")" = "$SESSION_ID" ]; then
   rm -f "$LOOKUP"
+fi
+
+# Sidecar files are only useful while the session is live
+if [ -n "$SESSION_ID" ]; then
+  rm -f "$TASKS_DIR/${SESSION_ID}.txt.lock" "$TASKS_DIR/${SESSION_ID}.txt.gen"
 fi
 
 exit 0

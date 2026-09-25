@@ -622,26 +622,40 @@ def test_cli_background_parse_response_no_memo():
     assert memo == ''
 
 
-def test_cli_background_main_disables_hooks(tmp_path, monkeypatch):
-    """Detached CLI helper should disable hooks before invoking claude."""
+def _write_job(tmp_path, task_file, **extra):
+    import json
+    job = {'prompt': 'summarize me', 'task_file': str(task_file)}
+    job.update(extra)
+    job_file = tmp_path / 'job.json'
+    job_file.write_text(json.dumps(job))
+    return job_file
+
+
+def _mock_cli(monkeypatch, stdout='Summarized task', returncode=0, seen=None):
     import cli_background
 
-    prompt_file = tmp_path / 'prompt.txt'
-    task_file = tmp_path / 'task.txt'
-    prompt_file.write_text('summarize me')
-
-    seen = {}
-
     def mock_run(cmd, **kwargs):
-        seen['cmd'] = cmd
+        if seen is not None:
+            seen['cmd'] = cmd
         class Result:
-            returncode = 0
-            stdout = 'Summarized task'
-            stderr = ''
-        return Result()
+            pass
+        r = Result()
+        r.returncode = returncode
+        r.stdout = stdout
+        r.stderr = ''
+        return r
 
     monkeypatch.setattr(cli_background.subprocess, 'run', mock_run)
-    monkeypatch.setattr(sys, 'argv', ['cli_background.py', str(prompt_file), str(task_file)])
+    return cli_background
+
+
+def test_cli_background_main_disables_hooks(tmp_path, monkeypatch):
+    """Detached CLI helper should disable hooks before invoking claude."""
+    task_file = tmp_path / 'task.txt'
+    job_file = _write_job(tmp_path, task_file)
+    seen = {}
+    cli_background = _mock_cli(monkeypatch, seen=seen)
+    monkeypatch.setattr(sys, 'argv', ['cli_background.py', str(job_file)])
 
     cli_background.main()
 
@@ -650,6 +664,174 @@ def test_cli_background_main_disables_hooks(tmp_path, monkeypatch):
     settings_value = seen['cmd'][seen['cmd'].index('--settings') + 1]
     assert '"disableAllHooks":true' in settings_value.replace(' ', '')
     assert '--no-session-persistence' in seen['cmd']
+    assert '--bare' not in seen['cmd']  # --bare skips subscription login
+    assert not job_file.exists()  # job file is consumed
+
+
+def test_cli_background_falls_back_when_cli_fails(tmp_path, monkeypatch):
+    """A CLI failure must not leave the statusline stale: use the keyword fallback."""
+    task_file = tmp_path / 'task.txt'
+    task_file.write_text('INIT:proj\n')
+    job_file = _write_job(tmp_path, task_file, fallback_task='Fix the login bug', fallback_done=False)
+    cli_background = _mock_cli(monkeypatch, stdout='', returncode=1)
+    monkeypatch.setattr(sys, 'argv', ['cli_background.py', str(job_file)])
+
+    cli_background.main()
+
+    assert task_file.read_text().splitlines()[0] == 'WIP:Fix the login bug'
+
+
+def test_cli_background_treats_login_banner_as_failure(tmp_path, monkeypatch):
+    task_file = tmp_path / 'task.txt'
+    job_file = _write_job(tmp_path, task_file, fallback_task='Fix the login bug')
+    cli_background = _mock_cli(monkeypatch, stdout='Not logged in · Please run /login', returncode=0)
+    monkeypatch.setattr(sys, 'argv', ['cli_background.py', str(job_file)])
+
+    cli_background.main()
+
+    assert task_file.read_text().splitlines()[0] == 'WIP:Fix the login bug'
+
+
+def test_cli_background_skips_write_when_superseded(tmp_path, monkeypatch):
+    """A newer helper (newer generation token) owns the task file."""
+    from dynamic_task_update import write_generation
+    task_file = tmp_path / 'task.txt'
+    task_file.write_text('WIP:newer result\n')
+    write_generation(str(task_file))  # current token
+    job_file = _write_job(tmp_path, task_file, generation='stale-token')
+    cli_background = _mock_cli(monkeypatch, stdout='Old slow result')
+    monkeypatch.setattr(sys, 'argv', ['cli_background.py', str(job_file)])
+
+    try:
+        cli_background.main()
+    except SystemExit as e:
+        assert e.code == 0
+
+    assert task_file.read_text().splitlines()[0] == 'WIP:newer result'
+
+
+def test_cli_background_respects_manual_pin(tmp_path, monkeypatch):
+    """If the user ran /task while the helper was running, keep MANUAL."""
+    task_file = tmp_path / 'task.txt'
+    task_file.write_text('MANUAL:Reviewing strategy\n')
+    job_file = _write_job(tmp_path, task_file)
+    cli_background = _mock_cli(monkeypatch, stdout='Auto result')
+    monkeypatch.setattr(sys, 'argv', ['cli_background.py', str(job_file)])
+
+    try:
+        cli_background.main()
+    except SystemExit as e:
+        assert e.code == 0
+
+    assert task_file.read_text().splitlines()[0] == 'MANUAL:Reviewing strategy'
+
+
+def test_cli_background_preserves_prev_history(tmp_path, monkeypatch):
+    task_file = tmp_path / 'task.txt'
+    task_file.write_text('WIP:\nPREV:1:old task\nPREV:2:older task\n')
+    job_file = _write_job(tmp_path, task_file)
+    cli_background = _mock_cli(monkeypatch, stdout='New task')
+    monkeypatch.setattr(sys, 'argv', ['cli_background.py', str(job_file)])
+
+    cli_background.main()
+
+    assert task_file.read_text().splitlines() == ['WIP:New task', 'PREV:1:old task', 'PREV:2:older task']
+
+
+def test_launch_cli_background_writes_job_and_generation(tmp_path, monkeypatch):
+    import json
+    import dynamic_task_update as d
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            captured['args'] = args
+            captured['env'] = kwargs.get('env', {})
+
+    monkeypatch.setattr(d.subprocess, 'Popen', FakePopen)
+    task_file = tmp_path / 'task.txt'
+    d._launch_cli_background('PROMPT', str(task_file), str(tmp_path / 'memos'), 'proj',
+                             fallback=('kw task', False))
+
+    job_path = captured['args'][-1]
+    job = json.loads(open(job_path, encoding='utf-8').read())
+    os.unlink(job_path)
+    assert job['prompt'] == 'PROMPT'
+    assert job['fallback_task'] == 'kw task'
+    assert job['generation'] == d.read_generation(str(task_file))
+    assert captured['env']['CLAUDE_TAB_SKIP_HOOK'] == '1'
+
+
+# ---------------------------------------------------------------------------
+# Transcript hygiene: injected entries must not become the task anchor
+# ---------------------------------------------------------------------------
+
+def _jsonl(tmp_path, entries):
+    import json
+    p = tmp_path / 't.jsonl'
+    p.write_text('\n'.join(json.dumps(e, ensure_ascii=False) for e in entries) + '\n')
+    return str(p)
+
+
+def test_parse_transcript_skips_slash_command_entries(tmp_path):
+    from dynamic_task_update import parse_transcript
+    path = _jsonl(tmp_path, [
+        {'type': 'user', 'message': {'content': '<command-name>/login</command-name>\n<command-message>login</command-message>'}},
+        {'type': 'user', 'message': {'content': '<local-command-stdout>Login successful</local-command-stdout>'}},
+        {'type': 'user', 'message': {'content': 'Fix the login bug in auth.py'}},
+        {'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': 'Looking at auth.py'}]}},
+    ])
+    msgs = parse_transcript(path)
+    assert [m['content'] for m in msgs] == ['Fix the login bug in auth.py', 'Looking at auth.py']
+
+
+def test_parse_transcript_skips_meta_sidechain_and_notifications(tmp_path):
+    from dynamic_task_update import parse_transcript
+    path = _jsonl(tmp_path, [
+        {'type': 'user', 'isMeta': True, 'message': {'content': 'injected context'}},
+        {'type': 'user', 'isSidechain': True, 'message': {'content': 'subagent prompt'}},
+        {'type': 'user', 'parent_tool_use_id': 'toolu_1', 'message': {'content': 'subagent prompt 2'}},
+        {'type': 'user', 'message': {'content': '<task-notification>agent finished</task-notification>'}},
+        {'type': 'user', 'message': {'content': '[Request interrupted by user]'}},
+        {'type': 'user', 'message': {'content': 'Real request here'}},
+    ])
+    msgs = parse_transcript(path)
+    assert [m['content'] for m in msgs] == ['Real request here']
+
+
+def test_parse_transcript_strips_system_reminder_blocks(tmp_path):
+    from dynamic_task_update import parse_transcript
+    path = _jsonl(tmp_path, [
+        {'type': 'user', 'message': {'content': '<system-reminder>\nlots of context\n</system-reminder>\nAdd a retry to the fetcher'}},
+        {'type': 'user', 'message': {'content': '<system-reminder>only a reminder</system-reminder>'}},
+    ])
+    msgs = parse_transcript(path)
+    assert [m['content'] for m in msgs] == ['Add a retry to the fetcher']
+
+
+def test_truncate_task_limits_length():
+    from dynamic_task_update import truncate_task
+    assert truncate_task('x' * 60) == 'x' * 60
+    assert truncate_task('x' * 61) == 'x' * 57 + '...'
+    assert truncate_task('  spaced  ') == 'spaced'
+
+
+def test_log_error_writes_and_never_raises(tmp_path, monkeypatch):
+    import dynamic_task_update as d
+    log = tmp_path / 'sub' / '_errors.log'
+    monkeypatch.setattr(d, 'ERROR_LOG', str(log))
+    d.log_error('backend x failed')
+    assert 'backend x failed' in log.read_text()
+    monkeypatch.setattr(d, 'ERROR_LOG', '/dev/null/not-writable/x.log')
+    d.log_error('ignored')  # must not raise
+
+
+def test_looks_like_cli_error():
+    from claude_cli_common import looks_like_cli_error
+    assert looks_like_cli_error('Not logged in · Please run /login')
+    assert looks_like_cli_error('Error: something')
+    assert not looks_like_cli_error('修复登录 bug')
+    assert not looks_like_cli_error('')
 
 
 # ---------------------------------------------------------------------------
@@ -1240,3 +1422,175 @@ def test_skip_hook_env_still_stops_main(tmp_path):
     )
     assert r.returncode == 0, r.stderr
     assert task_file.read_text() == 'INIT:x\n'
+
+
+# ---------------------------------------------------------------------------
+# Shell hooks: exercised end to end with a fake HOME (require jq)
+# ---------------------------------------------------------------------------
+
+import shutil
+import pytest
+
+_HAS_JQ = shutil.which('jq') is not None
+
+
+def _run_hook(script, payload, home):
+    import json
+    env = dict(os.environ, HOME=str(home))
+    return subprocess.run(
+        ['bash', os.path.join(SCRIPTS_DIR, script)],
+        input=json.dumps(payload), capture_output=True, text=True, timeout=30, env=env,
+    )
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_session_start_writes_placeholder_and_lookup(tmp_path):
+    r = _run_hook('session_start.sh', {'session_id': 'sid-1', 'cwd': str(tmp_path), 'source': 'startup'}, tmp_path)
+    assert r.returncode == 0, r.stderr
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    assert (tasks / 'sid-1.txt').read_text().startswith('INIT:' + tmp_path.name)
+    lookups = list(tasks.glob('current_*.txt'))
+    assert len(lookups) == 1 and lookups[0].read_text().strip() == 'sid-1'
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_session_start_keeps_task_on_resume_and_compact(tmp_path):
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    tasks.mkdir(parents=True)
+    (tasks / 'sid-2.txt').write_text('WIP:Refactoring the parser\n')
+    for source in ('resume', 'compact', 'clear'):
+        r = _run_hook('session_start.sh', {'session_id': 'sid-2', 'cwd': str(tmp_path), 'source': source}, tmp_path)
+        assert r.returncode == 0, r.stderr
+        assert (tasks / 'sid-2.txt').read_text() == 'WIP:Refactoring the parser\n', source
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_session_start_memo_overview_counts_entries(tmp_path):
+    memos = tmp_path / '.claude' / 'memos' / 'proj'
+    memos.mkdir(parents=True)
+    (memos / '2026-01-01.md').write_text('# 2026-01-01\n\n## 10:00 | a\n- x\n\n## 11:00 | b\n- y\n')
+    (memos / '2026-01-02.md').write_text('# 2026-01-02\n')  # zero entries: grep -c exits 1
+    r = _run_hook('session_start.sh', {'session_id': 'sid-3', 'cwd': str(tmp_path), 'source': 'startup'}, tmp_path)
+    assert r.returncode == 0
+    assert 'integer expression expected' not in r.stderr
+    assert '[memo] Recent projects:' in r.stdout
+    assert '2026-01-01 2' in r.stdout
+    assert '2026-01-02' not in r.stdout
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_task_completed_marks_done_and_keeps_prev(tmp_path):
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    tasks.mkdir(parents=True)
+    (tasks / 'sid-4.txt').write_text('WIP:Ship the feature\nPREV:1:old\n')
+    r = _run_hook('task_completed.sh', {'session_id': 'sid-4'}, tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert (tasks / 'sid-4.txt').read_text().splitlines() == ['DONE:Ship the feature', 'PREV:1:old']
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_task_completed_ignores_empty_placeholder(tmp_path):
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    tasks.mkdir(parents=True)
+    (tasks / 'sid-5.txt').write_text('WIP:\n')
+    _run_hook('task_completed.sh', {'session_id': 'sid-5'}, tmp_path)
+    assert (tasks / 'sid-5.txt').read_text() == 'WIP:\n'
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_session_end_removes_own_lookup_and_sidecars(tmp_path):
+    _run_hook('session_start.sh', {'session_id': 'sid-6', 'cwd': str(tmp_path), 'source': 'startup'}, tmp_path)
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    (tasks / 'sid-6.txt.gen').write_text('1')
+    (tasks / 'sid-6.txt.lock').write_text('')
+    # A different session took over the same cwd: lookup must survive
+    lookup = next(tasks.glob('current_*.txt'))
+    lookup.write_text('sid-other\n')
+    _run_hook('session_end.sh', {'session_id': 'sid-6', 'cwd': str(tmp_path)}, tmp_path)
+    assert lookup.exists()
+    assert not (tasks / 'sid-6.txt.gen').exists()
+    assert not (tasks / 'sid-6.txt.lock').exists()
+    lookup.write_text('sid-6\n')
+    _run_hook('session_end.sh', {'session_id': 'sid-6', 'cwd': str(tmp_path)}, tmp_path)
+    assert not lookup.exists()
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_statusline_renders_task_and_footer(tmp_path):
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    tasks.mkdir(parents=True)
+    (tasks / 'sid-7.txt').write_text('WIP:Fix \\n escapes\nPREV:1:earlier work\n')
+    payload = {
+        'session_id': 'sid-7',
+        'workspace': {'current_dir': '/a/b/myproj'},
+        'context_window': {'used_percentage': 42.7},
+        'cost': {'total_duration_ms': 5400000},
+        'model': {'display_name': 'Haiku 4.5'},
+    }
+    r = _run_hook('session_statusline.sh', payload, tmp_path)
+    assert r.returncode == 0, r.stderr
+    lines = r.stdout.splitlines()
+    assert '[WIP]' in lines[0] and 'Fix \\n escapes' in lines[0]
+    assert '[DONE]' in lines[1] and 'earlier work' in lines[1]
+    assert 'myproj' in lines[2] and 'ctx' in lines[2] and '42%' in lines[2]
+    assert '1h30m' in lines[2] and 'Haiku 4.5' in lines[2]
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_statusline_falls_back_to_token_counts(tmp_path):
+    payload = {
+        'session_id': 'none',
+        'cwd': '/a/b',
+        'context_window': {'context_window_size': 200000,
+                           'current_usage': {'input_tokens': 1000, 'cache_read_input_tokens': 99000}},
+        'cost': {'total_duration_ms': 61000},
+    }
+    r = _run_hook('session_statusline.sh', payload, tmp_path)
+    assert r.returncode == 0
+    assert '50%' in r.stdout and 'starting...' in r.stdout
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_statusline_survives_garbage_input(tmp_path):
+    env = dict(os.environ, HOME=str(tmp_path))
+    r = subprocess.run(['bash', os.path.join(SCRIPTS_DIR, 'session_statusline.sh')],
+                       input='not json', capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode == 0
+    assert r.stderr == ''
+    assert 'ctx' in r.stdout
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_stop_hook_wrapper_rotates_done_into_prev(tmp_path):
+    """DONE on entry becomes PREV:1 and the current line is reset for the summarizer."""
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    tasks.mkdir(parents=True)
+    (tasks / 'sid-8.txt').write_text('DONE:Finished thing\nPREV:1:before\nPREV:2:way before\nPREV:3:ancient\n')
+    scripts_home = tmp_path / '.claude' / 'scripts'
+    scripts_home.mkdir(parents=True)
+    # The wrapper calls ~/.claude/scripts/dynamic_task_update.py; give it a no-op there
+    (scripts_home / 'dynamic_task_update.py').write_text('import sys; sys.exit(0)\n')
+    transcript = tmp_path / 't.jsonl'
+    transcript.write_text('{"type":"user","message":{"content":"hello there"}}\n')
+    r = _run_hook('dynamic_task_update.sh',
+                  {'session_id': 'sid-8', 'transcript_path': str(transcript), 'stop_hook_active': False}, tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == '{"continue":true,"suppressOutput":true}'
+    assert (tasks / 'sid-8.txt').read_text().splitlines() == [
+        'WIP:', 'PREV:1:Finished thing', 'PREV:2:before', 'PREV:3:way before']
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_stop_hook_wrapper_respects_manual_and_recursion_guard(tmp_path):
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    tasks.mkdir(parents=True)
+    (tasks / 'sid-9.txt').write_text('MANUAL:pinned\n')
+    transcript = tmp_path / 't.jsonl'
+    transcript.write_text('{"type":"user","message":{"content":"hello there"}}\n')
+    payload = {'session_id': 'sid-9', 'transcript_path': str(transcript), 'stop_hook_active': False}
+    r = _run_hook('dynamic_task_update.sh', payload, tmp_path)
+    assert r.stdout.strip() == '{"continue":true,"suppressOutput":true}'
+    assert (tasks / 'sid-9.txt').read_text() == 'MANUAL:pinned\n'
+    payload['stop_hook_active'] = True
+    r = _run_hook('dynamic_task_update.sh', payload, tmp_path)
+    assert r.returncode == 0 and 'continue' in r.stdout

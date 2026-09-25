@@ -1,3 +1,7 @@
+---
+description: "Set the task description shown in the statusline for this session"
+---
+
 Set or update the session task description shown in the statusline.
 
 When this command is invoked:
