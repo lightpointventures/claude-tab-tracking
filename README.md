@@ -197,19 +197,47 @@ With the plugin's **Desktop notifications** option turned on (`/plugin` → conf
 
 ### Recalling past context
 
-Use `/tab:recall` to load memos from previous sessions:
+`/tab:recall` loads memos back into the conversation within a token budget, in two stages: the entries that fit are loaded in full, the rest appear as a one-line index you can fetch by id.
 
 ```
-/tab:recall              # list recent projects, pick one interactively
-/tab:recall my-project   # skip to date selection for a specific project
-/tab:recall 3-20         # load all memos from that date
+/tab:recall                       # current project, last 14 days, budgeted
+/tab:recall my-project            # another project ("all" for every project)
+/tab:recall index                 # list entries without loading them
+/tab:recall general/2026-09-25#3  # load specific entries by id
+/tab:recall --budget 4000         # override the budget; --full disables it
 ```
 
-On session start, the plugin shows a hint if memos exist:
+Which entries make the cut is decided by a score, not by date alone:
+
+| Tag | Weight | Half-life |
+|-----|--------|-----------|
+| 【决策】 decision | 1.0 | 90 days |
+| 【TODO】 open | 1.0 | none (closed TODOs drop to 0.1) |
+| 【手记】 hand-written note | 1.0 | 90 days |
+| 【结论】 conclusion | 0.7 | 30 days |
+| 【数据】 data | 0.4 | 14 days |
+| 【子代理】 subagent | 0.3 | 7 days |
+
+Bullets written by the hooks count half as much as notes you add yourself with `/tab:memo add`. A decision that a later, similar decision in the same project replaced is marked *superseded* and weighted 0.35. The budget comes from `recall_token_budget` in `~/.claude/memos/config.yaml` (default 8000). The script behind this, `scripts/memo_recall.py`, can be used directly.
+
+### Picking up where you left off
+
+When a session ends, the plugin remembers what that directory was working on together with the git HEAD. The next session started in the same directory within 7 days, with HEAD unchanged, opens with:
+
 ```
-[memo] Recent projects: my-app (today, 3 entries) | api-server (3-20, 5 entries)
-Type /tab:recall for details
+[tab] Last session in this directory (2h ago, HEAD unchanged): Migrate the parser to SQLite
+[tab] Continue where it left off, or run /tab:recall to load that day's memos.
 ```
+
+Disable with `handoff: false` in `~/.claude/memos/config.yaml`.
+
+### Coexisting with Claude Code's auto-memory
+
+Claude Code keeps its own auto-memory (`MEMORY.md` plus topic files per project). This plugin does not write into it. It adds exactly one line to `MEMORY.md`, once, and only when the project already has memos: a pointer saying where the daily memos live and how to load them. Disable with `memory_pointer: false`.
+
+### What is never written
+
+Before a memo is written, credential-looking strings are replaced with `[REDACTED]`: API keys (`sk-ant-…`, `AKIA…`, `ghp_…`, `xox…`, Google keys), JWTs, bearer tokens, private key blocks, and `password=`/`token=`/`api_key=` style pairs.
 
 ### Viewing memos
 
@@ -220,6 +248,7 @@ Use `/tab:memo` to browse memos without loading them into context:
 /tab:memo 3-20           # show memos from a specific date
 /tab:memo my-project     # list recent memo files for a project
 /tab:memo search JWT     # full-text search across all memos
+/tab:memo add <text>     # file a hand-written note under the current task
 ```
 
 ## Manual task override
@@ -251,6 +280,7 @@ Plugin layout (marketplace install):
 | `scripts/session_statusline.sh` | Statusline renderer (`--segment` for embedding) |
 | `scripts/session_end.sh` | SessionEnd cleanup |
 | `scripts/memo_search.py` | Full-text memo search |
+| `scripts/memo_recall.py` | Scored, budgeted recall (`auto` / `index` / `show` / `add`) |
 
 Data written on your machine (identical for both install methods):
 
@@ -274,6 +304,15 @@ then remove the `statusLine` key from `~/.claude/settings.json` if you set it wi
 Manual install: `./uninstall.sh` (removes the hooks, scripts and commands; keeps your data).
 
 ## Changelog
+
+### 1.2.0 — 2026-09-25
+
+- **New: scored, budgeted recall** — `/tab:recall` now runs `memo_recall.py`: entries are scored by tag weight, per-tag half-life, source (hand-written vs hook-written) and status (superseded decisions, closed TODOs), the best ones are loaded within `recall_token_budget`, and the rest are listed as an index to fetch by id (`show`). `index` lists without loading; `add` files a 【手记】 note.
+- **New: `/tab:memo add`** — Hand-written notes under the current task, weighted above hook output.
+- **New: handoff anchor** — SessionEnd records the directory's task and git HEAD; the next session there (same HEAD, within 7 days) starts with that task as context. `handoff: false` disables.
+- **New: auto-memory pointer** — One idempotent line in Claude Code's `MEMORY.md` pointing at this project's memos; never content. `memory_pointer: false` disables.
+- **New: secret redaction** — API keys, JWTs, bearer tokens, private keys and `password=`-style pairs are replaced with `[REDACTED]` before any memo is written.
+- Not added: a `PreCompact` capture point. The Stop hook already writes memos every turn and the on-disk transcript survives compaction, so there is nothing for it to save.
 
 ### 1.1.0 — 2026-09-25
 

@@ -194,19 +194,47 @@ cd claude-tab-tracking && ./install.sh
 
 ### 恢复上下文
 
-使用 `/tab:recall` 加载历史备忘录：
+`/tab:recall` 在 token 预算内把备忘录加载回对话，分两段：放得下的条目全文加载，其余以一行一条的索引列出，可按 id 再取。
 
 ```
-/tab:recall              # 列出最近项目，交互选择
-/tab:recall my-project   # 直接跳到某个项目的日期选择
-/tab:recall 3-20         # 加载指定日期的所有备忘录
+/tab:recall                       # 当前项目，最近 14 天，按预算加载
+/tab:recall my-project            # 其他项目（"all" 为全部项目）
+/tab:recall index                 # 只列索引不加载
+/tab:recall general/2026-09-25#3  # 按 id 加载指定条目
+/tab:recall --budget 4000         # 覆盖预算；--full 不限制
 ```
 
-启动会话时，插件会提示是否有历史记录：
+哪些条目入选由评分决定，而不只看日期：
+
+| 标签 | 权重 | 半衰期 |
+|------|------|--------|
+| 【决策】 | 1.0 | 90 天 |
+| 【TODO】未关闭 | 1.0 | 不衰减（已关闭的降到 0.1） |
+| 【手记】手写笔记 | 1.0 | 90 天 |
+| 【结论】 | 0.7 | 30 天 |
+| 【数据】 | 0.4 | 14 天 |
+| 【子代理】 | 0.3 | 7 天 |
+
+hook 自动写的条目权重减半，`/tab:memo add` 手写的按全额计。同一项目里被后来相似决策取代的决策标为 *superseded*，权重 0.35。预算取自 `~/.claude/memos/config.yaml` 的 `recall_token_budget`（默认 8000）。底层脚本 `scripts/memo_recall.py` 可直接使用。
+
+### 接着上次做
+
+会话结束时，插件记下这个目录正在做的任务和 git HEAD。7 天内在同一目录、HEAD 未变的情况下再开会话，开头会提示：
+
 ```
-[memo] 最近项目: my-app (今天, 3条) | api-server (3-20, 5条)
-输入 /tab:recall 查看详情
+[tab] Last session in this directory (2h ago, HEAD unchanged): Migrate the parser to SQLite
+[tab] Continue where it left off, or run /tab:recall to load that day's memos.
 ```
+
+在 `~/.claude/memos/config.yaml` 设 `handoff: false` 可关闭。
+
+### 与 Claude Code 原生记忆共存
+
+Claude Code 有自己的 auto-memory（每个项目的 `MEMORY.md` 加主题文件）。本插件不往里写内容，只在项目已有备忘录时往 `MEMORY.md` 加一行指针（只加一次），说明每日备忘录在哪、怎么加载。`memory_pointer: false` 可关闭。
+
+### 永远不会写入的内容
+
+写备忘录前，形似凭据的字符串会替换成 `[REDACTED]`：API key（`sk-ant-…`、`AKIA…`、`ghp_…`、`xox…`、Google key）、JWT、bearer token、私钥块，以及 `password=` / `token=` / `api_key=` 这类键值对。
 
 ### 查看备忘录
 
@@ -217,6 +245,7 @@ cd claude-tab-tracking && ./install.sh
 /tab:memo 3-20           # 查看指定日期的备忘录
 /tab:memo my-project     # 列出某项目最近的备忘录文件
 /tab:memo search JWT     # 跨所有备忘录全文搜索
+/tab:memo add <text>     # 在当前任务下记一条手写笔记
 ```
 
 ## 手动设置任务
@@ -248,6 +277,7 @@ cd claude-tab-tracking && ./install.sh
 | `scripts/session_statusline.sh` | 状态栏渲染（`--segment` 用于嵌入） |
 | `scripts/session_end.sh` | SessionEnd 清理 |
 | `scripts/memo_search.py` | 备忘录全文搜索 |
+| `scripts/memo_recall.py` | 评分 + 预算的召回（`auto` / `index` / `show` / `add`） |
 
 写到本机的数据（两种安装方式相同）：
 
@@ -271,6 +301,15 @@ cd claude-tab-tracking && ./install.sh
 手动安装：`./uninstall.sh`（移除 hooks、脚本和命令，保留数据）。
 
 ## 更新日志
+
+### 1.2.0 — 2026-09-25
+
+- **新增：评分 + 预算的召回** — `/tab:recall` 改由 `memo_recall.py` 执行：按标签权重、按标签半衰期、来源（手写 vs hook）和状态（被取代的决策、已关闭的 TODO）评分，在 `recall_token_budget` 内加载最有价值的条目，其余列成索引可按 id 再取（`show`）。`index` 只列不加载；`add` 记一条【手记】。
+- **新增：`/tab:memo add`** — 在当前任务下记手写笔记，权重高于 hook 输出。
+- **新增：交接锚** — SessionEnd 记下目录的任务和 git HEAD；7 天内同目录、同 HEAD 再开会话时以此开场。`handoff: false` 关闭。
+- **新增：原生记忆指针** — 在 Claude Code 的 `MEMORY.md` 里加一行指向本项目备忘录的指针，只加一次，不写内容。`memory_pointer: false` 关闭。
+- **新增：写盘脱敏** — API key、JWT、bearer token、私钥和 `password=` 类键值对在写入备忘录前替换成 `[REDACTED]`。
+- 未做：`PreCompact` 捕获点。Stop hook 每轮都写备忘录，磁盘上的对话记录也不受压缩影响，它没有可保存的东西。
 
 ### 1.1.0 — 2026-09-25
 

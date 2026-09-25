@@ -68,6 +68,42 @@ if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
   fi
 fi
 
+MEMO_CONFIG="$HOME/.claude/memos/config.yaml"
+config_off() {  # config_off KEY -> true when "KEY: false" is set in config.yaml
+  [ -f "$MEMO_CONFIG" ] && grep -Eiq "^[[:space:]]*$1[[:space:]]*:[[:space:]]*(false|no|off|0)[[:space:]]*$" "$MEMO_CONFIG"
+}
+
+# --- Handoff replay: same directory, same git HEAD, within 7 days ---
+HANDOFF="$TASKS_DIR/handoff_${CWD_HASH}.json"
+if [ "$SOURCE" = "startup" ] && [ -f "$HANDOFF" ] && ! config_off handoff; then
+  H_TASK=$(jq -r '.task // ""' "$HANDOFF" 2>/dev/null)
+  H_HEAD=$(jq -r '.head // ""' "$HANDOFF" 2>/dev/null)
+  H_AT=$(jq -r '.at // 0' "$HANDOFF" 2>/dev/null)
+  NOW=$(date +%s)
+  AGE=$(( NOW - ${H_AT:-0} ))
+  CUR_HEAD=$(git -C "$CWD" rev-parse HEAD 2>/dev/null || echo "")
+  if [ -n "$H_TASK" ] && [ "$AGE" -lt 604800 ] 2>/dev/null; then
+    if [ "$H_HEAD" = "$CUR_HEAD" ]; then
+      if [ "$AGE" -lt 3600 ]; then AGE_FMT="$(( AGE / 60 ))m"; elif [ "$AGE" -lt 86400 ]; then AGE_FMT="$(( AGE / 3600 ))h"; else AGE_FMT="$(( AGE / 86400 ))d"; fi
+      echo "[tab] Last session in this directory (${AGE_FMT} ago, HEAD unchanged): ${H_TASK}"
+      echo "[tab] Continue where it left off, or run /tab:recall to load that day's memos."
+    fi
+  fi
+fi
+
+# --- One-line pointer in Claude Code's own auto-memory index (never content) ---
+# Auto-memory is keyed by the git root; outside git, by the directory itself.
+if [ "$SOURCE" = "startup" ] && ! config_off memory_pointer; then
+  ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null || echo "$CWD")
+  ENCODED=$(printf '%s' "$ROOT" | sed 's/[^A-Za-z0-9]/-/g')
+  MEMORY_MD="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/${ENCODED}/memory/MEMORY.md"
+  PROJECT_NAME=$(basename "$ROOT" | sed 's/[^A-Za-z0-9_-]/-/g' | tr '[:upper:]' '[:lower:]' | cut -c1-50)
+  if [ -f "$MEMORY_MD" ] && [ -d "$HOME/.claude/memos/$PROJECT_NAME" ] \
+     && ! grep -q 'Conversation memos (claude-tab-tracking)' "$MEMORY_MD" 2>/dev/null; then
+    printf '%s\n' "- Conversation memos (claude-tab-tracking): per-day decisions/TODOs for this project are in ~/.claude/memos/${PROJECT_NAME}/; load with /tab:recall, browse with /tab:memo" >> "$MEMORY_MD"
+  fi
+fi
+
 # --- Memo overview (only on a fresh start; stdout becomes session context) ---
 MEMO_DIR="$HOME/.claude/memos"
 if [ "$SOURCE" = "startup" ] && [ -d "$MEMO_DIR" ]; then
@@ -101,7 +137,7 @@ if [ "$SOURCE" = "startup" ] && [ -d "$MEMO_DIR" ]; then
   if [ -n "$OVERVIEW" ]; then
     echo "[memo] Recent projects:"
     printf '%s' "$OVERVIEW" | head -5
-    echo "Type /recall for details"
+    echo "Type /tab:recall for details"
   fi
 fi
 

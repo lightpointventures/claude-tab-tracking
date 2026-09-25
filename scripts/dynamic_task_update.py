@@ -77,6 +77,7 @@ DEFAULT_CONFIG = {
     'memo_merge_window': 300,
     'memo_merge_threshold': 0.6,
     'memo_subagents': True,
+    'memory_pointer': True,
 }
 
 
@@ -661,6 +662,41 @@ def _get_backend_chain():
 
 
 # ---------------------------------------------------------------------------
+# Secret redaction (applied to everything written to a memo file)
+# ---------------------------------------------------------------------------
+
+_SECRET_PATTERNS = [
+    re.compile(r'sk-ant-[A-Za-z0-9_-]{8,}'),
+    re.compile(r'\bsk-[A-Za-z0-9]{20,}'),
+    re.compile(r'\bAKIA[0-9A-Z]{16}\b'),
+    re.compile(r'\bgh[pousr]_[A-Za-z0-9]{20,}'),
+    re.compile(r'\bgithub_pat_[A-Za-z0-9_]{20,}'),
+    re.compile(r'\bxox[abpr]-[A-Za-z0-9-]{10,}'),
+    re.compile(r'\bAIza[0-9A-Za-z_-]{30,}'),
+    re.compile(r'\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'),  # JWT
+    re.compile(r'(?i)\bbearer\s+[A-Za-z0-9._-]{16,}'),
+    re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)'),
+]
+_KV_SECRET_RE = re.compile(
+    r'(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)'
+    r'(\s*[:=]\s*)([\'"]?)([^\s\'"]{6,})'
+)
+
+
+def redact_secrets(text):
+    """Replace credential-looking substrings with [REDACTED]. Never raises."""
+    if not text:
+        return text
+    try:
+        for pat in _SECRET_PATTERNS:
+            text = pat.sub('[REDACTED]', text)
+        text = _KV_SECRET_RE.sub(lambda m: f'{m.group(1)}{m.group(2)}{m.group(3)}[REDACTED]', text)
+    except Exception:
+        pass
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Memo file helpers
 # ---------------------------------------------------------------------------
 
@@ -730,6 +766,9 @@ def write_memo(memo_content, task_desc, project_name, memo_base_dir=None, merge_
 
     merge_window = merge_config.get('memo_merge_window', 300)
     merge_threshold = merge_config.get('memo_merge_threshold', 0.6)
+
+    memo_content = redact_secrets(memo_content)
+    task_desc = redact_secrets(task_desc)
 
     today = datetime.now().strftime('%Y-%m-%d')
     time_str = datetime.now().strftime('%H:%M')

@@ -1877,3 +1877,179 @@ def test_notify_is_silent_unless_enabled(tmp_path):
     r = subprocess.run(['/bin/bash', os.path.join(SCRIPTS_DIR, 'notify.sh')], input=json.dumps(payload),
                        capture_output=True, text=True, timeout=30, env=env)
     assert r.returncode == 0 and r.stdout == ''
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: budgeted recall, redaction, handoff anchor, MEMORY.md pointer
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timedelta
+
+
+def _memo_tree(tmp_path, files):
+    """files: {(project, day): text}"""
+    base = tmp_path / 'memos'
+    for (proj, day), text in files.items():
+        (base / proj).mkdir(parents=True, exist_ok=True)
+        (base / proj / f'{day}.md').write_text(text)
+    return base
+
+
+def test_recall_scoring_half_life_and_tags(tmp_path):
+    import memo_recall as mr
+    now = datetime(2026, 9, 25, 12, 0)
+    base = _memo_tree(tmp_path, {
+        ('p', '2026-09-25'): '# d\n\n## 10:00 | fresh\n- 【决策】a\n- 【数据】b\n',
+        ('p', '2026-06-27'): '# d\n\n## 10:00 | old\n- 【决策】c\n- 【数据】d\n',  # 90 days ago
+    })
+    entries = {e.title: e for e in mr.load_entries(str(base), 'p', None, now=now)}
+    fresh, old = entries['fresh'], entries['old']
+    # decision 1.0 + data 0.4, both × auto source 0.5 → 0.7
+    assert abs(fresh.score - 0.7) < 0.01
+    # 90 days: decision halves (0.25), data ~0 (0.4×0.5×0.5^(90/14) ≈ 0.002)
+    assert 0.25 < old.score < 0.26
+
+
+def test_recall_open_todo_does_not_decay_and_closed_is_ignored(tmp_path):
+    import memo_recall as mr
+    now = datetime(2026, 9, 25, 12, 0)
+    base = _memo_tree(tmp_path, {
+        ('p', '2026-03-01'): '# d\n\n## 09:00 | todos\n- 【TODO】ship it\n- 【TODO】[x] already done\n',
+    })
+    e = mr.load_entries(str(base), 'p', None, now=now)[0]
+    assert abs(e.score - (0.5 + 0.05)) < 0.001
+
+
+def test_recall_marks_superseded_decisions(tmp_path):
+    import memo_recall as mr
+    base = _memo_tree(tmp_path, {
+        ('p', '2026-09-20'): '# d\n\n## 09:00 | first\n- 【决策】用 Postgres 存索引数据\n',
+        ('p', '2026-09-24'): '# d\n\n## 09:00 | second\n- 【决策】改用 SQLite 存索引数据\n',
+        ('q', '2026-09-24'): '# d\n\n## 09:00 | other project\n- 【决策】用 Postgres 存索引数据\n',
+    })
+    entries = mr.load_entries(str(base), None, None, now=datetime(2026, 9, 25))
+    by_id = {e.id: e for e in entries}
+    assert by_id['p/2026-09-20#1'].bullets[0].superseded_by == 'p/2026-09-24#1'
+    assert by_id['p/2026-09-24#1'].bullets[0].superseded_by is None
+    assert by_id['q/2026-09-24#1'].bullets[0].superseded_by is None  # projects are independent
+    assert 'superseded by p/2026-09-24#1' in mr.render_show([by_id['p/2026-09-20#1']])
+
+
+def test_recall_manual_notes_outrank_hook_bullets(tmp_path):
+    import memo_recall as mr
+    now = datetime(2026, 9, 25, 12, 0)
+    base = _memo_tree(tmp_path, {
+        ('p', '2026-09-25'): '# d\n\n## 10:00 | a\n- 【决策】auto\n\n## 11:00 | b\n- 【手记】manual\n',
+    })
+    scores = {e.title: e.score for e in mr.load_entries(str(base), 'p', None, now=now)}
+    assert abs(scores['b'] - 1.0) < 0.01 and abs(scores['a'] - 0.5) < 0.01
+
+
+def test_recall_budget_selection_and_index_of_rest(tmp_path):
+    import memo_recall as mr
+    now = datetime(2026, 9, 25, 12, 0)
+    big = '- 【数据】' + 'x' * 400
+    base = _memo_tree(tmp_path, {
+        ('p', '2026-09-25'): f'# d\n\n## 09:00 | cheap decision\n- 【决策】keep\n\n## 10:00 | expensive data\n{big}\n',
+    })
+    entries = mr.load_entries(str(base), 'p', None, now=now)
+    chosen, rest = mr.select_within_budget(entries, budget=100)
+    assert [e.title for e in chosen] == ['cheap decision']
+    assert [e.title for e in rest] == ['expensive data']
+    out = mr.render_auto(entries, 100)
+    assert 'loaded 1' in out and '## 09:00 | cheap decision' in out
+    assert 'Not loaded (1)' in out and 'p/2026-09-25#2' in out
+    assert 'x' * 100 not in out  # the expensive body is not loaded
+    # No budget: everything
+    chosen, rest = mr.select_within_budget(entries, budget=0)
+    assert len(chosen) == 2 and not rest
+
+
+def test_recall_cli_index_show_add(tmp_path, monkeypatch):
+    import memo_recall as mr
+    base = _memo_tree(tmp_path, {
+        ('p', '2026-09-25'): '# d\n\n## 09:00 | one\n- 【决策】keep\n',
+    })
+    monkeypatch.setenv('PWD', str(tmp_path))
+    out = []
+    monkeypatch.setattr('builtins.print', lambda *a, **k: out.append(' '.join(str(x) for x in a)))
+    assert mr.main(['index', '--project', 'all', '--days', '3650'], memo_base_dir=str(base)) == 0
+    assert 'p/2026-09-25#1' in out[-1] and '决策×1' in out[-1]
+    assert mr.main(['show', 'p/2026-09-25#1'], memo_base_dir=str(base)) == 0
+    assert '- 【决策】keep' in out[-1]
+    assert mr.main(['add', '--project', 'p', '--task', 'one', 'remember this'], memo_base_dir=str(base)) == 0
+    text = (base / 'p' / f'{datetime.now():%Y-%m-%d}.md').read_text()
+    assert '- 【手记】remember this' in text
+    assert mr.main(['bogus'], memo_base_dir=str(base)) == 1
+
+
+def test_redact_secrets_masks_credentials_and_keeps_prose():
+    from dynamic_task_update import redact_secrets
+    s = redact_secrets('key sk-ant-api03-abcdefghijklmnop123 and AKIAABCDEFGHIJKLMNOP and password=hunter22 and token: "abcdefgh"')
+    assert 'sk-ant' not in s and 'AKIA' not in s and 'hunter22' not in s and 'abcdefgh' not in s
+    assert s.count('[REDACTED]') == 4
+    assert redact_secrets('普通决策：用 sqlite 存索引') == '普通决策：用 sqlite 存索引'
+    assert redact_secrets('') == ''
+    assert 'ghp_' not in redact_secrets('push with ghp_abcdefghijklmnopqrstuvwxyz0123')
+    assert 'PRIVATE KEY-----' not in redact_secrets('-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----')
+
+
+def test_write_memo_redacts_before_writing(tmp_path):
+    from dynamic_task_update import write_memo
+    write_memo('【数据】api_key=sk-ant-api03-zzzzzzzzzzzzzzzz', 'token=abcdefgh123 setup', 'p', str(tmp_path))
+    text = (tmp_path / 'p' / f'{datetime.now():%Y-%m-%d}.md').read_text()
+    assert 'sk-ant' not in text and 'abcdefgh123' not in text
+    assert '[REDACTED]' in text
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_handoff_anchor_written_and_replayed(tmp_path):
+    import json
+    proj = tmp_path / 'proj'
+    proj.mkdir()
+    _run_hook('session_start.sh', {'session_id': 'h1', 'cwd': str(proj), 'source': 'startup'}, tmp_path)
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    (tasks / 'h1.txt').write_text('WIP:Migrate the parser to SQLite\n')
+    r = _run_hook('session_end.sh', {'session_id': 'h1', 'cwd': str(proj)}, tmp_path)
+    assert r.returncode == 0, r.stderr
+    handoff = next(tasks.glob('handoff_*.json'))
+    data = json.loads(handoff.read_text())
+    assert data['task'] == 'Migrate the parser to SQLite' and data['head'] == ''  # not a git repo
+    # Next startup in the same directory replays it
+    r = _run_hook('session_start.sh', {'session_id': 'h2', 'cwd': str(proj), 'source': 'startup'}, tmp_path)
+    assert 'Last session in this directory' in r.stdout and 'Migrate the parser to SQLite' in r.stdout
+    # A different HEAD (simulate by editing the anchor) suppresses the replay
+    data['head'] = 'deadbeef'
+    handoff.write_text(json.dumps(data))
+    r = _run_hook('session_start.sh', {'session_id': 'h3', 'cwd': str(proj), 'source': 'startup'}, tmp_path)
+    assert 'Last session in this directory' not in r.stdout
+    # INIT placeholders are never recorded
+    (tasks / 'h4.txt').write_text('INIT:proj\n')
+    handoff.unlink()
+    _run_hook('session_end.sh', {'session_id': 'h4', 'cwd': str(proj)}, tmp_path)
+    assert not list(tasks.glob('handoff_*.json'))
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_memory_md_pointer_added_once_and_only_when_memos_exist(tmp_path):
+    proj = tmp_path / 'my-proj'
+    proj.mkdir()
+    encoded = re.sub(r'[^A-Za-z0-9]', '-', str(proj))
+    memory_md = tmp_path / '.claude' / 'projects' / encoded / 'memory' / 'MEMORY.md'
+    memory_md.parent.mkdir(parents=True)
+    memory_md.write_text('# Memory Index\n\n- [something](something.md) — x\n')
+    payload = {'session_id': 'm1', 'cwd': str(proj), 'source': 'startup'}
+    # No memos for this project yet: no pointer
+    _run_hook('session_start.sh', payload, tmp_path)
+    assert 'claude-tab-tracking' not in memory_md.read_text()
+    (tmp_path / '.claude' / 'memos' / 'my-proj').mkdir(parents=True)
+    _run_hook('session_start.sh', payload, tmp_path)
+    _run_hook('session_start.sh', payload, tmp_path)
+    text = memory_md.read_text()
+    assert text.count('claude-tab-tracking') == 1
+    assert '~/.claude/memos/my-proj/' in text and text.startswith('# Memory Index')
+    # Opt out
+    (tmp_path / '.claude' / 'memos' / 'config.yaml').write_text('memory_pointer: false\n')
+    memory_md.write_text('# Memory Index\n')
+    _run_hook('session_start.sh', payload, tmp_path)
+    assert 'claude-tab-tracking' not in memory_md.read_text()

@@ -1,63 +1,36 @@
 ---
-description: "Load past conversation memos into context"
+description: "Load past conversation memos into context, within a token budget"
+allowed-tools: Bash, AskUserQuestion
 ---
 
-Load past conversation memos from `~/.claude/memos/` into the current conversation context.
+Load past memos from `~/.claude/memos/` into this conversation, without blowing the context. All selection and budgeting is done by a script; your job is to run it and show its output.
 
-## Token Budget
+The script: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memo_recall.py"`. It scores every entry (decisions and open TODOs count most; data decays fastest; a decision that a later, similar decision replaced is down-weighted; hand-written notes outrank hook-written ones) and picks the most valuable entries that fit `recall_token_budget` from `~/.claude/memos/config.yaml` (default 8000).
 
-Before loading memo content, enforce a token budget to prevent excessive context injection.
+Decide by the argument:
 
-1. Read config: `~/.claude/memos/config.yaml` key `recall_token_budget` (default: 8000)
-2. If user passed `--budget N`, use N instead. If user passed `--full`, skip budget enforcement.
-3. Estimate tokens of the target memo file(s) using `len(content) / 1.5`
-4. Apply three-tier loading:
-   - **Full mode**: estimated tokens <= budget → load entire file
-   - **Summary mode**: full exceeds budget → load only lines starting with `# `, `## `, or containing `【结论】`
-   - **Truncated mode**: summary still exceeds budget → load summary entries from end of file backward until budget is reached
-5. Show the user which mode was used:
+1. **No argument** (`/tab:recall`) — budgeted auto-load for the current project, last 14 days:
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memo_recall.py" auto
    ```
-   Loading {project}/{date}.md
-   Full content ~{N} tokens (budget: {budget})
-   → Using {mode} mode ({actual} tokens loaded, {entries} entries)
+   Show the output verbatim in a code block. It ends with an index of entries that did not fit; if the user wants one of those, run `show` with its id (step 4).
+
+2. **Project name** (`/tab:recall my-project`, or `all` for every project):
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memo_recall.py" auto --project <name>
    ```
-6. If user wants to expand a specific entry, use Read tool on the memo file with offset/limit to read just that section.
 
-## Selection Flow
+3. **Index only** (`/tab:recall index`, optionally with a project and `--days N`): list entries one per line without loading their content:
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memo_recall.py" index [--project <name>] [--days N]
+   ```
+   Then ask which ids to load (AskUserQuestion is fine for short lists).
 
-When this command is invoked:
+4. **Specific entries** (`/tab:recall general/2026-09-25#3,general/2026-09-25#5`): ids as printed by the index:
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memo_recall.py" show <id>[,<id>...]
+   ```
 
-1. **No argument** (`/recall`):
-   - Scan `~/.claude/memos/` for project directories (skip `_archive`)
-   - For each project, find the most recent `.md` file and count entries (lines starting with `## `)
-   - Sort by most recent activity
-   - Show a numbered list:
-     ```
-     Recent projects:
-     1. chenglue-agents (today, 3 entries)
-     2. alpha-station (3-20, 5 entries)
-     3. claude-tab-tracking (3-19, 2 entries)
-     ```
-   - Ask: "Which project? (number or name)"
-   - After user picks a project, list recent dates:
-     ```
-     chenglue-agents memos:
-     1. 2026-03-21 — 3 entries (~800 tokens)
-     2. 2026-03-20 — 5 entries (~1200 tokens)
-     3. 2026-03-19 — 2 entries (~400 tokens)
-     ```
-   - Ask: "Which date? (number, or multiple like 1,2)"
-   - Read the selected file(s) and present content subject to token budget
+5. **Budget override**: append `--budget N` to any `auto` call; `--full` disables the budget.
 
-2. **Project name argument** (`/recall chenglue-agents`):
-   - Skip to the date selection step for that project
-
-3. **Date argument** (`/recall 3-20`):
-   - Convert to `YYYY-MM-DD`, read all project memos for that date
-   - Present the content subject to token budget
-
-4. **Budget override** (`/recall --budget 4000` or `/recall --full`):
-   - `--budget N` overrides config recall_token_budget for this invocation
-   - `--full` disables budget enforcement entirely
-
-Use AskUserQuestion for the interactive selection steps.
+After loading, do not restate the memos; continue with the user's work using them as context. Superseded decisions are marked in the output; treat the newer one as current.
