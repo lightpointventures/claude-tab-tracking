@@ -203,6 +203,11 @@ rm -rf ~/.claude/memos/
 
 ## 更新日志
 
+### 2026-09-25
+
+- **修复:CLI 后端从未运行(session 一直停在 `[---]`/INIT)** — `CLAUDE_TAB_SKIP_HOOK` 防递归检查原本写在 `dynamic_task_update.py` 的模块 import 阶段,而 `cli_background.py` 恰好带着该变量启动并 import 这个模块,导致 helper 在调用 `claude -p` 之前就退出。没有 `ANTHROPIC_API_KEY` 也没有 Ollama 的机器上,任务更新和 memo 都静默失效。检查已移入 `main()`,并补了回归测试。
+- **修复:Stop hook 输出** — `dynamic_task_update.sh` 所有退出路径统一输出 `{"continue":true,"suppressOutput":true}`,固定 hook 环境的 `PATH`,并吞掉 Python stderr,后端失败不再冒泡成 hook 报错。
+
 ### 2026-03-22
 
 - **修复：CLI 后端死循环** — 子进程 `claude -p` 现在使用 `disableAllHooks` + 环境变量双重防护，防止 Stop hook 递归调用。感谢 [@GP2P](https://github.com/GP2P) 提交 PR #3。

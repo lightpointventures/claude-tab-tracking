@@ -209,6 +209,11 @@ cd claude-tab-tracking && ./uninstall.sh
 
 ## Changelog
 
+### 2026-09-25
+
+- **Fix: CLI backend never ran (sessions stuck at `[---]`/INIT)** — The `CLAUDE_TAB_SKIP_HOOK` recursion guard lived at module import time in `dynamic_task_update.py`, but `cli_background.py` is launched with that variable set and imports the module, so the helper exited before calling `claude -p`. On machines without `ANTHROPIC_API_KEY` or Ollama this silently disabled task updates and memos. Guard moved into `main()`; regression tests added.
+- **Fix: Stop hook output** — `dynamic_task_update.sh` now prints `{"continue":true,"suppressOutput":true}` on every exit path, pins a sane `PATH` for hook environments, and swallows Python stderr so a backend failure can never surface as a hook error.
+
 ### 2026-03-26
 
 - **New: Multi-layer task history** — Up to 3 previous completed tasks stored (`PREV:1/2/3` format), top 2 displayed in statusline. Backward compatible with old `PREV:` format.

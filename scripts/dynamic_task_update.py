@@ -33,10 +33,6 @@ except ImportError:
 from claude_cli_common import build_claude_cli_cmd
 
 
-# Prevent recursion from CLI backend subprocess
-if os.environ.get('CLAUDE_TAB_SKIP_HOOK') == '1':
-    sys.exit(0)
-
 MEMO_BASE_DIR = os.path.join(str(pathlib.Path.home()), '.claude', 'memos')
 MEMO_CONFIG_PATH = os.path.join(MEMO_BASE_DIR, 'config.yaml')
 
@@ -775,6 +771,11 @@ def shift_prev_lines(current_done_desc, task_file_path):
 # ---------------------------------------------------------------------------
 
 def main():
+    # Prevent recursion when the Stop hook fires inside a child `claude -p`
+    # session. Must live in main(), not at import time: cli_background.py is
+    # launched with this env var set and imports this module.
+    if os.environ.get('CLAUDE_TAB_SKIP_HOOK') == '1':
+        sys.exit(0)
     if len(sys.argv) != 3:
         sys.exit(0)
 

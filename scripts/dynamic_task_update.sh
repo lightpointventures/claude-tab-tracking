@@ -1,24 +1,31 @@
 #!/bin/bash
 # Stop hook: dynamically updates task description and detects completion
 
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+
+finish_ok() {
+  printf '{"continue":true,"suppressOutput":true}\n'
+  exit 0
+}
+
 INPUT=$(cat)
 
 # Prevent infinite loops
 STOP_ACTIVE=$(echo "$INPUT" | jq -r '.stop_hook_active // false')
 if [ "$STOP_ACTIVE" = "true" ]; then
-  exit 0
+  finish_ok
 fi
 
 # Prevent recursion from CLI backend subprocess
 if [ "${CLAUDE_TAB_SKIP_HOOK:-0}" = "1" ]; then
-  exit 0
+  finish_ok
 fi
 
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 
 if [ -z "$SESSION_ID" ] || [ -z "$TRANSCRIPT" ] || [ ! -f "$TRANSCRIPT" ]; then
-  exit 0
+  finish_ok
 fi
 
 TASKS_DIR="$HOME/.claude/session-tasks"
@@ -28,7 +35,7 @@ TASK_FILE="$TASKS_DIR/${SESSION_ID}.txt"
 if [ -f "$TASK_FILE" ]; then
   CURRENT=$(head -1 "$TASK_FILE")
   if [[ "$CURRENT" == MANUAL:* ]]; then
-    exit 0
+    finish_ok
   fi
 fi
 
@@ -73,7 +80,7 @@ mkdir -p "$TASKS_DIR"
 # Call the Python helper script
 PYTHON3="/usr/bin/python3"
 [ -x "$PYTHON3" ] || PYTHON3=$(command -v python3 2>/dev/null || true)
-[ -z "$PYTHON3" ] && exit 0
-"$PYTHON3" "$HOME/.claude/scripts/dynamic_task_update.py" "$TRANSCRIPT" "$TASK_FILE"
+[ -z "$PYTHON3" ] && finish_ok
+"$PYTHON3" "$HOME/.claude/scripts/dynamic_task_update.py" "$TRANSCRIPT" "$TASK_FILE" >/dev/null 2>&1 || true
 
-exit 0
+finish_ok

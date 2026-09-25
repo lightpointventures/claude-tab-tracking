@@ -1198,3 +1198,45 @@ def test_memo_lifecycle_merge_and_summarize(tmp_path):
     full_tokens = estimate_tokens(content)
     summary_tokens = estimate_tokens(summary)
     assert summary_tokens < full_tokens
+
+
+# ---------------------------------------------------------------------------
+# Regression: CLAUDE_TAB_SKIP_HOOK guard must not kill the background helper
+# ---------------------------------------------------------------------------
+
+import subprocess
+
+SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'scripts')
+
+
+def _run_with_skip_hook(code):
+    env = dict(os.environ, CLAUDE_TAB_SKIP_HOOK='1')
+    return subprocess.run(
+        [sys.executable, '-c', code],
+        cwd=SCRIPTS_DIR, env=env, capture_output=True, text=True, timeout=30,
+    )
+
+
+def test_skip_hook_env_does_not_abort_import():
+    """cli_background.py is launched with CLAUDE_TAB_SKIP_HOOK=1 and imports
+    dynamic_task_update. An import-time sys.exit() makes the helper die before
+    ever calling claude, leaving every session stuck at INIT."""
+    r = _run_with_skip_hook("import dynamic_task_update, cli_background; print('imported')")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == 'imported'
+
+
+def test_skip_hook_env_still_stops_main(tmp_path):
+    """The recursion guard must still apply when the Stop hook entrypoint
+    itself runs inside a child claude session."""
+    transcript = tmp_path / 't.jsonl'
+    transcript.write_text('{"type":"user","message":{"content":"Fix the login bug please"}}\n'
+                          '{"type":"assistant","message":{"content":"Looking at auth.py now"}}\n')
+    task_file = tmp_path / 'task.txt'
+    task_file.write_text('INIT:x\n')
+    r = _run_with_skip_hook(
+        "import sys; sys.argv=['x', %r, %r]; import dynamic_task_update as d; d.main()"
+        % (str(transcript), str(task_file))
+    )
+    assert r.returncode == 0, r.stderr
+    assert task_file.read_text() == 'INIT:x\n'
