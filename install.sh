@@ -44,7 +44,7 @@ cp "$REPO_DIR/scripts/"*.sh "$SCRIPTS_DIR/"
 cp "$REPO_DIR/scripts/"*.py "$SCRIPTS_DIR/"
 chmod +x "$SCRIPTS_DIR/"*.sh "$SCRIPTS_DIR/"*.py
 # Commands reference ${CLAUDE_PLUGIN_ROOT} (substituted only for plugin installs);
-# point them at the copied scripts instead. /tab:setup is plugin-only.
+# point them at the copied scripts instead. /tabtrack:setup is plugin-only.
 for cmd in task memo recall; do
   sed "s|\${CLAUDE_PLUGIN_ROOT}/scripts|$SCRIPTS_DIR|g" "$REPO_DIR/commands/$cmd.md" > "$COMMANDS_DIR/$cmd.md"
 done

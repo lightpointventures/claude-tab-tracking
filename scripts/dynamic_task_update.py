@@ -5,7 +5,7 @@ Reads Claude Code transcript JSONL and generates a one-line task summary.
 Summarization backends (set CLAUDE_TAB_BACKEND to choose):
   "auto"    — try all backends in order: api → ollama → claude-cli → keywords (default)
   "cli"     — Claude Code CLI only (uses your Max subscription, no API key needed)
-  "api"     — Claude API only (requires ANTHROPIC_API_KEY)
+  "api"     — Claude API only (requires the anthropic_api_key plugin option, or ANTHROPIC_API_KEY for manual installs)
   "ollama"  — Ollama only (requires local server on port 11434)
   "keyword" — keyword heuristics only (zero dependencies)
 
@@ -498,11 +498,29 @@ CLAUDE_MODEL = 'claude-haiku-4-5-20251001'
 CLAUDE_TIMEOUT = 10
 
 
+def _api_key():
+    """API key for the direct-API backend.
+
+    Installed as a plugin, the key comes only from the plugin's own
+    `anthropic_api_key` option (stored in secure storage, exported to hooks
+    as CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY). Credentials that merely
+    happen to be in the user's environment are not picked up in that case.
+    The manual (install.sh) layout has no options, so it falls back to
+    ANTHROPIC_API_KEY.
+    """
+    key = os.environ.get('CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY', '').strip()
+    if key:
+        return key
+    if os.environ.get('CLAUDE_PLUGIN_ROOT'):
+        return ''
+    return os.environ.get('ANTHROPIC_API_KEY', '').strip()
+
+
 def claude_summarize(messages, min_turns=3, tags=None):
-    """Call Claude Haiku via Anthropic API. Raises if ANTHROPIC_API_KEY not set."""
-    api_key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
+    """Call Claude Haiku via the Anthropic API. Raises if no API key is configured."""
+    api_key = _api_key()
     if not api_key:
-        raise EnvironmentError('ANTHROPIC_API_KEY not set')
+        raise EnvironmentError('no Anthropic API key configured')
 
     user_content = build_user_prompt(messages, min_turns=min_turns, tags=tags)
 

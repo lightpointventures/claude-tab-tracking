@@ -7,7 +7,7 @@ Set or update the session task description shown in the statusline.
 When this command is invoked:
 
 1. Determine the task description:
-   - If the user typed something after the command (e.g. `/tab:task Fix the Model-A bug`), use that text as the description.
+   - If the user typed something after the command (e.g. `/tabtrack:task Fix the Model-A bug`), use that text as the description.
    - If no text was provided, ask: "What task are you working on in this session?"
 
 2. Find the current session's task file using the cwd-indexed lookup:

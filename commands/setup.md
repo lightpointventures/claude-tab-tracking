@@ -17,7 +17,7 @@ ls "$CLAUDE_DIR"/plugins/data/*/statusline.sh 2>/dev/null
 ```
 
 - Exactly one result: that is `{LAUNCHER}`.
-- No result: the SessionStart hook has not run in this session yet. Tell the user to run `/reload-plugins` (or restart Claude Code) and then `/tab:setup` again. Stop here.
+- No result: the SessionStart hook has not run in this session yet. Tell the user to run `/reload-plugins` (or restart Claude Code) and then `/tabtrack:setup` again. Stop here.
 
 ## Step 2: Clean up a manual (pre-plugin) install, if present
 
@@ -70,7 +70,7 @@ print("statusLine set to", launcher)
 PYEOF
 ```
 
-Then confirm to the user: "Statusline configured. It appears below the input box from the next response on; no restart needed." Also mention: "Use /tab:task to pin a description, /tab:memo and /tab:recall for conversation memos."
+Then confirm to the user: "Statusline configured. It appears below the input box from the next response on; no restart needed." Also mention: "Use /tabtrack:task to pin a description, /tabtrack:memo and /tabtrack:recall for conversation memos."
 
 ## Step 5: Segment mode (only if the user kept another statusline)
 

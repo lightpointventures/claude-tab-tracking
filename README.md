@@ -23,7 +23,7 @@ If you run multiple Claude Code sessions simultaneously, this tells you at a gla
 - `[---]` — session just started, showing directory and git branch
 - `[WIP]` — task in progress, auto-updated each turn
 - `[DONE]` — task completed (detected automatically)
-- `[SET]` — task manually set with `/tab:task`
+- `[SET]` — task manually set with `/tabtrack:task`
 
 When you finish one task and start another, the previous tasks stay visible as dimmed `[DONE]` lines beneath the current task (up to 2 previous tasks displayed, 3 stored).
 
@@ -49,7 +49,7 @@ The plugin picks the best available backend automatically:
 
 | Priority | Backend | Quality | Speed | Cost |
 |----------|---------|---------|-------|------|
-| 1 | Claude API (`ANTHROPIC_API_KEY` set) | Best | ~2s | ~$1/month |
+| 1 | Anthropic API (plugin option `anthropic_api_key`; `ANTHROPIC_API_KEY` for manual installs) | Best | ~2s | ~$1/month |
 | 2 | Ollama (local model running) | Good | ~2s | Free |
 | 3 | Claude Code CLI (Max subscription) | Best | ~10s (async) | Included in subscription |
 | 4 | Keyword heuristics | Basic | instant | Free |
@@ -64,7 +64,7 @@ Set the `CLAUDE_TAB_BACKEND` environment variable to pick a specific backend:
 # Use only Claude Code CLI (Max subscription, no API key needed)
 export CLAUDE_TAB_BACKEND=cli
 
-# Use only the Anthropic API
+# Use only the Anthropic API (set the anthropic_api_key plugin option first)
 export CLAUDE_TAB_BACKEND=api
 
 # Use only local Ollama
@@ -81,12 +81,12 @@ When set to a specific backend, no fallback is attempted — if that backend fai
 
 ### Token Budget
 
-Control how much context `/tab:recall` injects and how memo entries are deduplicated.
+Control how much context `/tabtrack:recall` injects and how memo entries are deduplicated.
 
 Add to `~/.claude/memos/config.yaml`:
 
 ```yaml
-# Max tokens loaded per /tab:recall invocation (default: 8000, 0 = unlimited)
+# Max tokens loaded per /tabtrack:recall invocation (default: 8000, 0 = unlimited)
 recall_token_budget: 8000
 
 # Merge similar memo entries within this window in seconds (default: 300, 0 = disabled)
@@ -101,7 +101,7 @@ memo_merge_threshold: 0.6
 - **Summary**: file exceeds budget → only headers + conclusions loaded
 - **Truncated**: summary exceeds budget → most recent entries loaded up to budget
 
-Override per-invocation: `/tab:recall --budget 4000` or `/tab:recall --full` (no limit).
+Override per-invocation: `/tabtrack:recall --budget 4000` or `/tabtrack:recall --full` (no limit).
 
 ## Install
 
@@ -114,7 +114,7 @@ Inside Claude Code:
 ```
 /plugin marketplace add lightpointventures/claude-tab-tracking
 /plugin install claude-tab-tracking@claude-tab-tracking
-/tab:setup
+/tabtrack:setup
 ```
 
 Or from your shell:
@@ -124,7 +124,7 @@ claude plugin marketplace add lightpointventures/claude-tab-tracking
 claude plugin install claude-tab-tracking@claude-tab-tracking
 ```
 
-then run `/tab:setup` once inside Claude Code. Plugins cannot change the `statusLine` setting themselves, so that command writes it for you (with a backup of `settings.json`). Task tracking and memos are active as soon as the plugin is installed; `/tab:setup` only controls what you see.
+then run `/tabtrack:setup` once inside Claude Code. Plugins cannot change the `statusLine` setting themselves, so that command writes it for you (with a backup of `settings.json`). Task tracking and memos are active as soon as the plugin is installed; `/tabtrack:setup` only controls what you see.
 
 Updates: bump-free. The statusline entry points at a launcher in the plugin's data directory that always resolves to the installed version, so `claude plugin update claude-tab-tracking` needs no re-setup.
 
@@ -136,7 +136,7 @@ Already using [ccstatusline](https://github.com/sirmalloc/ccstatusline), [claude
 ~/.claude/plugins/data/claude-tab-tracking-claude-tab-tracking/statusline.sh --segment
 ```
 
-`/tab:setup` detects an existing statusline and shows this path for you.
+`/tabtrack:setup` detects an existing statusline and shows this path for you.
 
 ### Manual install (no marketplace)
 
@@ -145,11 +145,21 @@ git clone https://github.com/lightpointventures/claude-tab-tracking.git
 cd claude-tab-tracking && ./install.sh
 ```
 
-This copies the scripts into `~/.claude/scripts/`, registers the hooks and statusline in `~/.claude/settings.json`, and installs the commands as `/task`, `/memo` and `/recall` (no `tab:` prefix). Do not combine it with the plugin install; `/tab:setup` offers to remove a manual install it finds.
+This copies the scripts into `~/.claude/scripts/`, registers the hooks and statusline in `~/.claude/settings.json`, and installs the commands as `/task`, `/memo` and `/recall` (no `tab:` prefix). Do not combine it with the plugin install; `/tabtrack:setup` offers to remove a manual install it finds.
+
+## What this plugin runs, sends and stores
+
+Everything below is local unless stated otherwise.
+
+- **Reads**: the current session's transcript (`~/.claude/projects/…/<session>.jsonl`), Claude Code's live-session registry (`~/.claude/sessions/`), subagent metadata next to the transcript, and the git branch/HEAD of the working directory.
+- **Runs**: `jq`, `python3`, `git`; for the Claude Code CLI backend, a background `claude -p --model haiku` with hooks disabled; for notifications (opt-in), `osascript` on macOS or `notify-send` on Linux.
+- **Sends**: a snippet of the conversation (first exchange plus the last 20 messages, each truncated to 300 characters) to exactly one summarizer, chosen in this order: the Anthropic API at `api.anthropic.com` if you set the `anthropic_api_key` option; a local Ollama server at `localhost:11434` if one is running; otherwise your own Claude Code login via `claude -p`. Nothing else leaves the machine. The plugin never reads credentials from your environment when installed as a plugin.
+- **Stores**: task state under `~/.claude/session-tasks/`, memos under `~/.claude/memos/`, the statusline launcher under `~/.claude/plugins/data/`, and one pointer line in Claude Code's `MEMORY.md` for the project. Credential-looking strings are redacted before a memo is written.
+- **Changes settings**: only `/tabtrack:setup`, which writes the `statusLine` entry in `~/.claude/settings.json` after backing the file up, and only when you run it.
 
 ## All sessions at a glance
 
-`/tab:sessions` lists every live Claude Code session on this machine, whether it was started from a terminal or the desktop app:
+`/tabtrack:sessions` lists every live Claude Code session on this machine, whether it was started from a terminal or the desktop app:
 
 ```
 5 live session(s) · 2 busy
@@ -162,7 +172,7 @@ This copies the scripts into `~/.claude/scripts/`, registers the hooks and statu
       [WIP]  筹备明日 Hillsdale 周边零售门店线下调研走访
 ```
 
-Per session: the native session name and busy/idle state (read from Claude Code's own registry in `~/.claude/sessions/`), this plugin's task line, subagents that are still running with their one-line descriptions, and how many memo entries that project has today. `▶` marks the session you ran it from. `/tab:sessions json` prints the same data as JSON; `/tab:sessions all` includes sessions whose process has exited. The underlying script, `scripts/sessions_overview.py`, works standalone too.
+Per session: the native session name and busy/idle state (read from Claude Code's own registry in `~/.claude/sessions/`), this plugin's task line, subagents that are still running with their one-line descriptions, and how many memo entries that project has today. `▶` marks the session you ran it from. `/tabtrack:sessions json` prints the same data as JSON; `/tabtrack:sessions all` includes sessions whose process has exited. The underlying script, `scripts/sessions_overview.py`, works standalone too.
 
 ## Conversation memory
 
@@ -185,7 +195,7 @@ When a subagent finishes (the `SubagentStop` hook), one bullet is filed under th
 
 ```
 ## 14:02 | Ship the marketplace install
-- 【决策】name the plugin "tab" so commands are /tab:*
+- 【决策】name the plugin "tab" so commands are /tabtrack:*
 - 【子代理】general-purpose「Research statusline tools on GitHub」 · 4m13s
 ```
 
@@ -197,14 +207,14 @@ With the plugin's **Desktop notifications** option turned on (`/plugin` → conf
 
 ### Recalling past context
 
-`/tab:recall` loads memos back into the conversation within a token budget, in two stages: the entries that fit are loaded in full, the rest appear as a one-line index you can fetch by id.
+`/tabtrack:recall` loads memos back into the conversation within a token budget, in two stages: the entries that fit are loaded in full, the rest appear as a one-line index you can fetch by id.
 
 ```
-/tab:recall                       # current project, last 14 days, budgeted
-/tab:recall my-project            # another project ("all" for every project)
-/tab:recall index                 # list entries without loading them
-/tab:recall general/2026-09-25#3  # load specific entries by id
-/tab:recall --budget 4000         # override the budget; --full disables it
+/tabtrack:recall                       # current project, last 14 days, budgeted
+/tabtrack:recall my-project            # another project ("all" for every project)
+/tabtrack:recall index                 # list entries without loading them
+/tabtrack:recall general/2026-09-25#3  # load specific entries by id
+/tabtrack:recall --budget 4000         # override the budget; --full disables it
 ```
 
 Which entries make the cut is decided by a score, not by date alone:
@@ -218,7 +228,7 @@ Which entries make the cut is decided by a score, not by date alone:
 | 【数据】 data | 0.4 | 14 days |
 | 【子代理】 subagent | 0.3 | 7 days |
 
-Bullets written by the hooks count half as much as notes you add yourself with `/tab:memo add`. A decision that a later, similar decision in the same project replaced is marked *superseded* and weighted 0.35. The budget comes from `recall_token_budget` in `~/.claude/memos/config.yaml` (default 8000). The script behind this, `scripts/memo_recall.py`, can be used directly.
+Bullets written by the hooks count half as much as notes you add yourself with `/tabtrack:memo add`. A decision that a later, similar decision in the same project replaced is marked *superseded* and weighted 0.35. The budget comes from `recall_token_budget` in `~/.claude/memos/config.yaml` (default 8000). The script behind this, `scripts/memo_recall.py`, can be used directly.
 
 ### Picking up where you left off
 
@@ -226,7 +236,7 @@ When a session ends, the plugin remembers what that directory was working on tog
 
 ```
 [tab] Last session in this directory (2h ago, HEAD unchanged): Migrate the parser to SQLite
-[tab] Continue where it left off, or run /tab:recall to load that day's memos.
+[tab] Continue where it left off, or run /tabtrack:recall to load that day's memos.
 ```
 
 Disable with `handoff: false` in `~/.claude/memos/config.yaml`.
@@ -241,22 +251,22 @@ Before a memo is written, credential-looking strings are replaced with `[REDACTE
 
 ### Viewing memos
 
-Use `/tab:memo` to browse memos without loading them into context:
+Use `/tabtrack:memo` to browse memos without loading them into context:
 
 ```
-/tab:memo                # show today's memos
-/tab:memo 3-20           # show memos from a specific date
-/tab:memo my-project     # list recent memo files for a project
-/tab:memo search JWT     # full-text search across all memos
-/tab:memo add <text>     # file a hand-written note under the current task
+/tabtrack:memo                # show today's memos
+/tabtrack:memo 3-20           # show memos from a specific date
+/tabtrack:memo my-project     # list recent memo files for a project
+/tabtrack:memo search JWT     # full-text search across all memos
+/tabtrack:memo add <text>     # file a hand-written note under the current task
 ```
 
 ## Manual task override
 
-Use `/tab:task` to set a custom description for the current session:
+Use `/tabtrack:task` to set a custom description for the current session:
 
 ```
-/tab:task Reviewing Q1 strategy report
+/tabtrack:task Reviewing Q1 strategy report
 ```
 
 This writes a `MANUAL:` prefix that pins the description and stops auto-updates for this session. The badge shows `[SET]`.
@@ -269,9 +279,9 @@ Plugin layout (marketplace install):
 |------|---------|
 | `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` | Plugin and marketplace manifests |
 | `hooks/hooks.json` | Registers the SessionStart / Stop / SessionEnd hooks |
-| `commands/setup.md` | `/tab:setup`: writes the statusline entry |
-| `commands/task.md`, `memo.md`, `recall.md`, `sessions.md` | `/tab:task`, `/tab:memo`, `/tab:recall`, `/tab:sessions` |
-| `scripts/sessions_overview.py` | Live-session overview used by `/tab:sessions` |
+| `commands/setup.md` | `/tabtrack:setup`: writes the statusline entry |
+| `commands/task.md`, `memo.md`, `recall.md`, `sessions.md` | `/tabtrack:task`, `/tabtrack:memo`, `/tabtrack:recall`, `/tabtrack:sessions` |
+| `scripts/sessions_overview.py` | Live-session overview used by `/tabtrack:sessions` |
 | `scripts/subagent_stop.sh` + `subagent_memo.py` | SubagentStop hook: subagent bullets in the memo |
 | `scripts/notify.sh` | Notification hook (opt-in desktop notifications) |
 | `scripts/session_start.sh` | SessionStart hook; also writes the statusline launcher |
@@ -299,11 +309,17 @@ Plugin install:
 /plugin uninstall claude-tab-tracking@claude-tab-tracking
 ```
 
-then remove the `statusLine` key from `~/.claude/settings.json` if you set it with `/tab:setup`. Memos and session state under `~/.claude/` are left in place.
+then remove the `statusLine` key from `~/.claude/settings.json` if you set it with `/tabtrack:setup`. Memos and session state under `~/.claude/` are left in place.
 
 Manual install: `./uninstall.sh` (removes the hooks, scripts and commands; keeps your data).
 
 ## Changelog
+
+### 1.3.0 — 2026-09-25
+
+- **Renamed: plugin `tab` → `tabtrack`** — Commands are now `/tabtrack:task`, `/tabtrack:memo`, `/tabtrack:recall`, `/tabtrack:sessions`, `/tabtrack:setup`. The install key (`claude-tab-tracking@claude-tab-tracking`), data directory and statusline launcher are unchanged, so existing installs keep working after `claude plugin update`.
+- **Changed: API key handling** — When installed as a plugin, the Anthropic API backend uses only the plugin's `anthropic_api_key` option (stored in secure storage) and never picks up `ANTHROPIC_API_KEY` from your environment. Manual installs keep the environment fallback.
+- **Docs: disclosure section** — README now lists exactly what the plugin reads, runs, sends and stores.
 
 ### 1.2.1 — 2026-09-25
 
@@ -311,8 +327,8 @@ Manual install: `./uninstall.sh` (removes the hooks, scripts and commands; keeps
 
 ### 1.2.0 — 2026-09-25
 
-- **New: scored, budgeted recall** — `/tab:recall` now runs `memo_recall.py`: entries are scored by tag weight, per-tag half-life, source (hand-written vs hook-written) and status (superseded decisions, closed TODOs), the best ones are loaded within `recall_token_budget`, and the rest are listed as an index to fetch by id (`show`). `index` lists without loading; `add` files a 【手记】 note.
-- **New: `/tab:memo add`** — Hand-written notes under the current task, weighted above hook output.
+- **New: scored, budgeted recall** — `/tabtrack:recall` now runs `memo_recall.py`: entries are scored by tag weight, per-tag half-life, source (hand-written vs hook-written) and status (superseded decisions, closed TODOs), the best ones are loaded within `recall_token_budget`, and the rest are listed as an index to fetch by id (`show`). `index` lists without loading; `add` files a 【手记】 note.
+- **New: `/tabtrack:memo add`** — Hand-written notes under the current task, weighted above hook output.
 - **New: handoff anchor** — SessionEnd records the directory's task and git HEAD; the next session there (same HEAD, within 7 days) starts with that task as context. `handoff: false` disables.
 - **New: auto-memory pointer** — One idempotent line in Claude Code's `MEMORY.md` pointing at this project's memos; never content. `memory_pointer: false` disables.
 - **New: secret redaction** — API keys, JWTs, bearer tokens, private keys and `password=`-style pairs are replaced with `[REDACTED]` before any memo is written.
@@ -320,14 +336,14 @@ Manual install: `./uninstall.sh` (removes the hooks, scripts and commands; keeps
 
 ### 1.1.0 — 2026-09-25
 
-- **New: `/tab:sessions`** — Overview of every live session: native name and busy/idle state, this plugin's task line, running subagents with descriptions, today's memo count. Works across terminal and desktop-app sessions; `json` and `all` arguments.
+- **New: `/tabtrack:sessions`** — Overview of every live session: native name and busy/idle state, this plugin's task line, running subagents with descriptions, today's memo count. Works across terminal and desktop-app sessions; `json` and `all` arguments.
 - **New: subagents in the memo** — `SubagentStop` files each finished subagent (type, description, duration) under the current task; agents under 15 s are skipped; `memo_subagents: false` disables it.
 - **New: optional desktop notifications** — Plugin option `notifications` (off by default) sends a notification carrying the session's task when it waits for input, needs approval, or a background agent completes.
 
 ### 1.0.0 — 2026-09-25
 
-- **New: official plugin format** — Install with `/plugin marketplace add lightpointventures/claude-tab-tracking` and `/plugin install claude-tab-tracking@claude-tab-tracking`. Hooks register through `hooks/hooks.json`; commands are `/tab:task`, `/tab:memo`, `/tab:recall`, plus the new `/tab:setup`.
-- **New: `/tab:setup`** — Writes the `statusLine` entry (plugins cannot), pointing at a launcher in the plugin data directory that survives updates. Detects a manual (pre-plugin) install and offers to remove it so hooks do not run twice.
+- **New: official plugin format** — Install with `/plugin marketplace add lightpointventures/claude-tab-tracking` and `/plugin install claude-tab-tracking@claude-tab-tracking`. Hooks register through `hooks/hooks.json`; commands are `/tabtrack:task`, `/tabtrack:memo`, `/tabtrack:recall`, plus the new `/tabtrack:setup`.
+- **New: `/tabtrack:setup`** — Writes the `statusLine` entry (plugins cannot), pointing at a launcher in the plugin data directory that survives updates. Detects a manual (pre-plugin) install and offers to remove it so hooks do not run twice.
 - **New: `--segment` mode** — The statusline prints only the task line, for embedding in ccstatusline, claude-powerline or claude-hud.
 - **Removed: `TaskCompleted` hook** — In current Claude Code this event fires when a background task/subagent completes, not when the session's work is done; it was flipping sessions to `[DONE]` prematurely. Completion now comes only from the summarizer.
 - **Fix: keyword backend never ran from the main path** — `keyword_fallback()` rejected the arguments the backend loop passes to every backend, so `CLAUDE_TAB_BACKEND=keyword` (and the final fallback in auto mode) silently did nothing.

@@ -1589,7 +1589,7 @@ def test_plugin_manifests_are_consistent():
     import json
     plugin = json.load(open(os.path.join(REPO_DIR, '.claude-plugin', 'plugin.json')))
     market = json.load(open(os.path.join(REPO_DIR, '.claude-plugin', 'marketplace.json')))
-    assert plugin['name'] == 'tab'  # commands are /tab:task, /tab:memo, ...
+    assert plugin['name'] == 'tabtrack'  # commands are /tabtrack:task, /tabtrack:memo, ...
     assert plugin['version'] == market['metadata']['version']
     entry = market['plugins'][0]
     assert entry['name'] == 'claude-tab-tracking' and entry['source'] == './'
@@ -1654,7 +1654,7 @@ def test_session_start_writes_plugin_launcher_and_hint(tmp_path):
     launcher = data_dir / 'statusline.sh'
     assert launcher.exists() and os.access(launcher, os.X_OK)
     assert os.path.join(os.path.abspath(SCRIPTS_DIR), 'session_statusline.sh') in launcher.read_text()
-    assert '/tab:setup' in r.stdout  # no statusLine configured yet
+    assert '/tabtrack:setup' in r.stdout  # no statusLine configured yet
     # The launcher works end to end
     tasks = tmp_path / '.claude' / 'session-tasks'
     (tasks / 'sid-11.txt').write_text('WIP:Via launcher\n')
@@ -1667,7 +1667,7 @@ def test_session_start_writes_plugin_launcher_and_hint(tmp_path):
     settings.write_text('{"statusLine":{"type":"command","command":"%s"}}' % launcher)
     r = _run_hook('session_start.sh', {'session_id': 'sid-12', 'cwd': str(tmp_path), 'source': 'startup'},
                   tmp_path, env={'CLAUDE_PLUGIN_DATA': str(data_dir)})
-    assert '/tab:setup' not in r.stdout
+    assert '/tabtrack:setup' not in r.stdout
 
 
 def test_main_keyword_backend_writes_task(tmp_path, monkeypatch):
@@ -2065,3 +2065,16 @@ def test_memory_md_pointer_uses_general_for_home_dir(tmp_path):
     (tmp_path / '.claude' / 'memos' / 'general').mkdir(parents=True)
     _run_hook('session_start.sh', {'session_id': 'm2', 'cwd': str(tmp_path), 'source': 'startup'}, tmp_path)
     assert '~/.claude/memos/general/' in memory_md.read_text()
+
+
+def test_api_key_ignores_environment_inside_plugin(monkeypatch):
+    import dynamic_task_update as d
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'env-key-should-not-be-used')
+    monkeypatch.delenv('CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY', raising=False)
+    monkeypatch.setenv('CLAUDE_PLUGIN_ROOT', '/x/plugin')
+    assert d._api_key() == ''
+    monkeypatch.setenv('CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY', 'option-key')
+    assert d._api_key() == 'option-key'
+    monkeypatch.delenv('CLAUDE_PLUGIN_OPTION_ANTHROPIC_API_KEY')
+    monkeypatch.delenv('CLAUDE_PLUGIN_ROOT')
+    assert d._api_key() == 'env-key-should-not-be-used'  # manual install keeps the env fallback

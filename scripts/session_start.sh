@@ -62,8 +62,8 @@ if [ -n "${CLAUDE_PLUGIN_DATA:-}" ]; then
     CURRENT_SL=$(jq -r '.statusLine.command // ""' "$SETTINGS" 2>/dev/null)
     case "$CURRENT_SL" in
       "$LAUNCHER"*|*session_statusline*|*claude-tab-tracking*) ;;
-      "") echo "[tab] Task tracking is active but not shown yet: run /tab:setup to add it to your statusline." ;;
-      *)  echo "[tab] Task tracking is active. Your statusline is set to another tool; run /tab:setup to embed the task line as a segment." ;;
+      "") echo "[tab] Task tracking is active but not shown yet: run /tabtrack:setup to add it to your statusline." ;;
+      *)  echo "[tab] Task tracking is active. Your statusline is set to another tool; run /tabtrack:setup to embed the task line as a segment." ;;
     esac
   fi
 fi
@@ -86,7 +86,7 @@ if [ "$SOURCE" = "startup" ] && [ -f "$HANDOFF" ] && ! config_off handoff; then
     if [ "$H_HEAD" = "$CUR_HEAD" ]; then
       if [ "$AGE" -lt 3600 ]; then AGE_FMT="$(( AGE / 60 ))m"; elif [ "$AGE" -lt 86400 ]; then AGE_FMT="$(( AGE / 3600 ))h"; else AGE_FMT="$(( AGE / 86400 ))d"; fi
       echo "[tab] Last session in this directory (${AGE_FMT} ago, HEAD unchanged): ${H_TASK}"
-      echo "[tab] Continue where it left off, or run /tab:recall to load that day's memos."
+      echo "[tab] Continue where it left off, or run /tabtrack:recall to load that day's memos."
     fi
   fi
 fi
@@ -104,7 +104,7 @@ if [ "$SOURCE" = "startup" ] && ! config_off memory_pointer; then
   esac
   if [ -f "$MEMORY_MD" ] && [ -d "$HOME/.claude/memos/$PROJECT_NAME" ] \
      && ! grep -q 'Conversation memos (claude-tab-tracking)' "$MEMORY_MD" 2>/dev/null; then
-    printf '%s\n' "- Conversation memos (claude-tab-tracking): per-day decisions/TODOs for this project are in ~/.claude/memos/${PROJECT_NAME}/; load with /tab:recall, browse with /tab:memo" >> "$MEMORY_MD"
+    printf '%s\n' "- Conversation memos (claude-tab-tracking): per-day decisions/TODOs for this project are in ~/.claude/memos/${PROJECT_NAME}/; load with /tabtrack:recall, browse with /tabtrack:memo" >> "$MEMORY_MD"
   fi
 fi
 
@@ -141,7 +141,7 @@ if [ "$SOURCE" = "startup" ] && [ -d "$MEMO_DIR" ]; then
   if [ -n "$OVERVIEW" ]; then
     echo "[memo] Recent projects:"
     printf '%s' "$OVERVIEW" | head -5
-    echo "Type /tab:recall for details"
+    echo "Type /tabtrack:recall for details"
   fi
 fi
 
