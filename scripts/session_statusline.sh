@@ -3,6 +3,24 @@
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
+# --segment: print only the task line, for embedding as a custom segment in
+# another statusline tool (ccstatusline, claude-powerline, claude-hud customLine).
+SEGMENT=0
+for arg in "$@"; do
+  [ "$arg" = "--segment" ] && SEGMENT=1
+done
+[ "${CLAUDE_TAB_SEGMENT:-0}" = "1" ] && SEGMENT=1
+
+# Hooks and statusline commands may run with a C/POSIX locale, where bash counts
+# and slices strings by byte and would cut multibyte task text mid-character.
+_utf8_ok() { local s="中文"; [ "${#s}" -eq 2 ]; }
+if ! _utf8_ok; then
+  for loc in C.UTF-8 en_US.UTF-8 zh_CN.UTF-8; do
+    export LC_ALL="$loc"
+    _utf8_ok 2>/dev/null && break
+  done 2>/dev/null
+fi
+
 INPUT=$(cat)
 if ! command -v jq &>/dev/null; then
   printf '[---] jq not found (brew install jq)\n'
@@ -79,6 +97,7 @@ if [ -f "$TASK_FILE" ]; then
     TASK="${TASK:0:57}..."
   fi
   printf '%b %s\n' "$BADGE" "$TASK"
+  [ "$SEGMENT" = "1" ] && exit 0
 
   # --- Lines 2-3 (optional): Previous tasks (PREV:1 and PREV:2 only) ---
   # Supports both old format (PREV:task) and new format (PREV:N:task)
@@ -106,6 +125,7 @@ if [ -f "$TASK_FILE" ]; then
   fi
 else
   printf '%b\n' "${DIM}[---] starting...${RESET}"
+  [ "$SEGMENT" = "1" ] && exit 0
 fi
 
 # --- Last line: Directory | context% | duration ---

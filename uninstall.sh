@@ -1,6 +1,8 @@
 #!/bin/bash
-# claude-tab-tracking uninstaller
-# Removes hooks, scripts, and commands installed by install.sh.
+# claude-tab-tracking uninstaller for the manual (install.sh) layout.
+# Removes hooks, scripts, and commands installed by install.sh, including
+# files from older versions (task_completed.sh). Also used by /tab:setup to
+# clear a manual install that would otherwise run alongside the plugin.
 # Does NOT remove user data (~/.claude/memos/, ~/.claude/session-tasks/).
 
 set -euo pipefail
@@ -10,7 +12,7 @@ SCRIPTS_DIR="$CLAUDE_DIR/scripts"
 COMMANDS_DIR="$CLAUDE_DIR/commands"
 SETTINGS="$CLAUDE_DIR/settings.json"
 
-echo "Uninstalling claude-tab-tracking..."
+echo "Removing the manual claude-tab-tracking install..."
 
 # --- Check dependencies ---
 PYTHON3=""

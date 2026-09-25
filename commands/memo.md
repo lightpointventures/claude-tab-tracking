@@ -22,7 +22,7 @@ When this command is invoked, determine what the user wants based on the argumen
    - Read and display them
 
 4. **`search <keyword>`** (`/memo search JWT`):
-   - Call the search helper: `python3 ~/.claude/scripts/memo_search.py "<keyword>"`
+   - Call the search helper: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/memo_search.py" "<keyword>"`
    - This performs full-text search across all memo files (case-insensitive)
    - Displays matching entries with project name, date, time, and the matching line
    - Supports `--max N` to limit results (default 10)

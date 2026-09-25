@@ -617,7 +617,8 @@ def detect_task_boundary(messages):
     return boundary
 
 
-def keyword_fallback(messages):
+def keyword_fallback(messages, min_turns=3, tags=None):
+    """Zero-dependency summary. Extra keyword arguments match the LLM backends' signature."""
     user_msgs = [m['content'] for m in messages if m['role'] == 'user']
     asst_msgs = [m['content'] for m in messages if m['role'] == 'assistant']
     if not user_msgs:

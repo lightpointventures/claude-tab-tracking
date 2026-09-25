@@ -22,20 +22,21 @@
 - `[---]` — 会话刚启动，显示目录和 git 分支
 - `[WIP]` — 任务进行中，每轮对话自动更新
 - `[DONE]` — 任务已完成（自动检测）
-- `[SET]` — 通过 `/task` 手动设置的任务
+- `[SET]` — 通过 `/tab:task` 手动设置的任务
 
 当完成一个任务并开始新任务时，上一个任务会以暗色 `[DONE]` 保留在当前任务下方。
 
 ## 工作原理
 
-四个 Claude Code hooks 协同工作：
+三个 Claude Code hooks 协同工作：
 
 | Hook | 功能 |
 |------|------|
-| `SessionStart` | 写入 `目录 [分支]` 作为初始标签 |
+| `SessionStart` | 写入 `目录 [分支]` 作为初始标签（恢复会话 / 压缩时保留原任务）；刷新状态栏启动器 |
 | `Stop` | 每次助手回复后：读取对话记录，更新任务描述，检测完成状态 |
-| `TaskCompleted` | Claude 明确完成任务时标记为 `[DONE]` |
 | `SessionEnd` | 清理会话状态文件 |
+
+完成状态由对话内容判断（摘要器标记 `[完成]`），不使用 Claude Code 的 `TaskCompleted` 事件：该事件针对单个后台任务，而非整个会话。
 
 ### 摘要生成后端
 
@@ -75,12 +76,12 @@ export CLAUDE_TAB_BACKEND=auto
 
 ### Token 预算
 
-控制 `/recall` 注入的上下文量，以及备忘录条目的去重合并。
+控制 `/tab:recall` 注入的上下文量，以及备忘录条目的去重合并。
 
 在 `~/.claude/memos/config.yaml` 中添加：
 
 ```yaml
-# 每次 /recall 加载的最大 token 数（默认: 8000，0 = 不限制）
+# 每次 /tab:recall 加载的最大 token 数（默认: 8000，0 = 不限制）
 recall_token_budget: 8000
 
 # 合并相似备忘录条目的时间窗口，单位秒（默认: 300，0 = 禁用）
@@ -95,23 +96,51 @@ memo_merge_threshold: 0.6
 - **摘要模式**：文件超出预算 → 仅加载标题 + 结论
 - **截断模式**：摘要仍超预算 → 从最新条目向前加载至预算用完
 
-单次覆盖：`/recall --budget 4000` 或 `/recall --full`（不限制）。
+单次覆盖：`/tab:recall --budget 4000` 或 `/tab:recall --full`（不限制）。
 
 ## 安装
 
-需要 [jq](https://jqlang.github.io/jq/)：
-```bash
-brew install jq  # macOS
-apt install jq   # Debian/Ubuntu
+需要 [jq](https://jqlang.github.io/jq/)（macOS `brew install jq`，Debian/Ubuntu `apt install jq`）和 Python 3（macOS 与多数 Linux 自带）。
+
+### 通过插件市场安装（推荐）
+
+在 Claude Code 里：
+
+```
+/plugin marketplace add lightpointventures/claude-tab-tracking
+/plugin install claude-tab-tracking@claude-tab-tracking
+/tab:setup
 ```
 
-然后：
+或在终端：
+
+```bash
+claude plugin marketplace add lightpointventures/claude-tab-tracking
+claude plugin install claude-tab-tracking@claude-tab-tracking
+```
+
+然后在 Claude Code 里运行一次 `/tab:setup`。插件无法自行修改 `statusLine` 设置，这条命令替你写入（会先备份 `settings.json`）。装好插件后任务追踪和备忘录就已经在工作，`/tab:setup` 只决定你看不看得到。
+
+升级无需重新设置：状态栏指向插件数据目录里的一个启动器，它总是解析到当前安装的版本，`claude plugin update claude-tab-tracking` 之后不用再跑 `/tab:setup`。
+
+### 嵌入到其他状态栏工具
+
+已经在用 [ccstatusline](https://github.com/sirmalloc/ccstatusline)、[claude-powerline](https://github.com/Owloops/claude-powerline) 或 [claude-hud](https://github.com/jarrodwatts/claude-hud)？可以保留。启动器支持 `--segment` 模式，只输出 `[WIP] …` 这一行，可作为自定义命令段接进去：
+
+```bash
+~/.claude/plugins/data/claude-tab-tracking-claude-tab-tracking/statusline.sh --segment
+```
+
+`/tab:setup` 检测到已有状态栏时会直接给出这条路径。
+
+### 手动安装（不走插件市场）
+
 ```bash
 git clone https://github.com/lightpointventures/claude-tab-tracking.git
 cd claude-tab-tracking && ./install.sh
 ```
 
-打开新的 Claude Code 会话，状态栏立即生效。
+脚本复制到 `~/.claude/scripts/`，hooks 与状态栏写入 `~/.claude/settings.json`，命令安装为 `/task`、`/memo`、`/recall`（无 `tab:` 前缀）。不要与插件安装同时使用；`/tab:setup` 发现手动安装时会提议移除。
 
 ## 对话记忆
 
@@ -130,83 +159,89 @@ cd claude-tab-tracking && ./install.sh
 
 ### 恢复上下文
 
-使用 `/recall` 加载历史备忘录：
+使用 `/tab:recall` 加载历史备忘录：
 
 ```
-/recall              # 列出最近项目，交互选择
-/recall my-project   # 直接跳到某个项目的日期选择
-/recall 3-20         # 加载指定日期的所有备忘录
+/tab:recall              # 列出最近项目，交互选择
+/tab:recall my-project   # 直接跳到某个项目的日期选择
+/tab:recall 3-20         # 加载指定日期的所有备忘录
 ```
 
 启动会话时，插件会提示是否有历史记录：
 ```
 [memo] 最近项目: my-app (今天, 3条) | api-server (3-20, 5条)
-输入 /recall 查看详情
+输入 /tab:recall 查看详情
 ```
 
 ### 查看备忘录
 
-使用 `/memo` 浏览备忘录（不加载到上下文）：
+使用 `/tab:memo` 浏览备忘录（不加载到上下文）：
 
 ```
-/memo                # 查看今天的备忘录
-/memo 3-20           # 查看指定日期的备忘录
-/memo my-project     # 列出某项目最近的备忘录文件
-/memo keyword        # 跨所有备忘录搜索关键词
+/tab:memo                # 查看今天的备忘录
+/tab:memo 3-20           # 查看指定日期的备忘录
+/tab:memo my-project     # 列出某项目最近的备忘录文件
+/tab:memo search JWT     # 跨所有备忘录全文搜索
 ```
 
 ## 手动设置任务
 
-使用 `/task` 命令为当前会话设置自定义描述：
+使用 `/tab:task` 为当前会话设置自定义描述：
 
 ```
-/task 审查 Q1 策略报告
+/tab:task 审查 Q1 策略报告
 ```
 
 这会写入 `MANUAL:` 前缀，锁定描述并停止自动更新。状态显示为 `[SET]`。
 
-## 安装的文件
+## 文件
 
-| 文件 | 用途 |
+插件布局（插件市场安装）：
+
+| 路径 | 用途 |
 |------|------|
-| `~/.claude/scripts/session_start.sh` | SessionStart hook |
-| `~/.claude/scripts/dynamic_task_update.sh` | Stop hook（bash 封装） |
-| `~/.claude/scripts/dynamic_task_update.py` | Stop hook（对话解析 + LLM 摘要） |
-| `~/.claude/scripts/cli_background.py` | Claude Code CLI 后端的后台执行脚本 |
-| `~/.claude/scripts/claude_cli_common.py` | `claude -p` 调用的公共封装 |
-| `~/.claude/scripts/memo_search.py` | 备忘录全文搜索（`/memo search`） |
-| `~/.claude/scripts/task_completed.sh` | TaskCompleted hook |
-| `~/.claude/scripts/session_statusline.sh` | 状态栏渲染 |
-| `~/.claude/scripts/session_end.sh` | SessionEnd 清理 |
-| `~/.claude/commands/task.md` | `/task` 命令 |
-| `~/.claude/commands/memo.md` | `/memo` 命令 |
-| `~/.claude/commands/recall.md` | `/recall` 命令 |
-| `~/.claude/session-tasks/` | 会话状态（7 天后自动清理） |
+| `.claude-plugin/plugin.json`、`.claude-plugin/marketplace.json` | 插件与市场清单 |
+| `hooks/hooks.json` | 注册 SessionStart / Stop / SessionEnd hooks |
+| `commands/setup.md` | `/tab:setup`：写入状态栏设置 |
+| `commands/task.md`、`memo.md`、`recall.md` | `/tab:task`、`/tab:memo`、`/tab:recall` |
+| `scripts/session_start.sh` | SessionStart hook；同时生成状态栏启动器 |
+| `scripts/dynamic_task_update.sh` + `.py` | Stop hook：对话解析 + 摘要后端 |
+| `scripts/cli_background.py`、`claude_cli_common.py` | Claude Code CLI 后端的后台执行脚本 |
+| `scripts/session_statusline.sh` | 状态栏渲染（`--segment` 用于嵌入） |
+| `scripts/session_end.sh` | SessionEnd 清理 |
+| `scripts/memo_search.py` | 备忘录全文搜索 |
+
+写到本机的数据（两种安装方式相同）：
+
+| 路径 | 用途 |
+|------|------|
+| `~/.claude/session-tasks/` | 会话任务状态（7 天后自动清理） |
 | `~/.claude/session-tasks/_errors.log` | 后端失败记录（hook 本身永远不会报错） |
 | `~/.claude/memos/` | 对话备忘录（按项目/日期归类） |
+| `~/.claude/plugins/data/claude-tab-tracking-claude-tab-tracking/statusline.sh` | 稳定的状态栏启动器（仅插件安装） |
 
 ## 卸载
 
-```bash
-rm -f ~/.claude/scripts/session_start.sh \
-      ~/.claude/scripts/dynamic_task_update.sh \
-      ~/.claude/scripts/dynamic_task_update.py \
-      ~/.claude/scripts/cli_background.py \
-      ~/.claude/scripts/claude_cli_common.py \
-      ~/.claude/scripts/memo_search.py \
-      ~/.claude/scripts/task_completed.sh \
-      ~/.claude/scripts/session_statusline.sh \
-      ~/.claude/scripts/session_end.sh \
-      ~/.claude/commands/task.md \
-      ~/.claude/commands/memo.md \
-      ~/.claude/commands/recall.md
-rm -rf ~/.claude/session-tasks/
-rm -rf ~/.claude/memos/
+插件安装：
+
+```
+/plugin uninstall claude-tab-tracking@claude-tab-tracking
 ```
 
-然后从 `~/.claude/settings.json` 的 `hooks` 中删除 `SessionStart`、`Stop`、`TaskCompleted`、`SessionEnd` 条目，并删除 `statusLine` 键。
+然后从 `~/.claude/settings.json` 删除 `/tab:setup` 写入的 `statusLine` 键。`~/.claude/` 下的备忘录和会话状态会保留。
+
+手动安装：`./uninstall.sh`（移除 hooks、脚本和命令，保留数据）。
 
 ## 更新日志
+
+### 1.0.0 — 2026-09-25
+
+- **新增：官方插件格式** — `/plugin marketplace add lightpointventures/claude-tab-tracking` 后 `/plugin install claude-tab-tracking@claude-tab-tracking` 即可安装。hooks 通过 `hooks/hooks.json` 注册；命令为 `/tab:task`、`/tab:memo`、`/tab:recall`，新增 `/tab:setup`。
+- **新增：`/tab:setup`** — 写入 `statusLine`（插件自身做不到），指向插件数据目录里一个不随升级变化的启动器。发现旧的手动安装时会提议移除，避免 hooks 跑两遍。
+- **新增：`--segment` 模式** — 状态栏只输出任务那一行，可嵌入 ccstatusline、claude-powerline 或 claude-hud。
+- **移除：`TaskCompleted` hook** — 当前 Claude Code 里该事件在后台任务/子代理完成时触发，而不是会话工作完成，会提前把会话标成 `[DONE]`。完成状态现在只来自摘要器。
+- **修复：主路径下关键词后端从未生效** — `keyword_fallback()` 不接受后端循环传给每个后端的参数，`CLAUDE_TAB_BACKEND=keyword`（以及自动模式的最终兜底）静默失效。
+- **修复：会话结束时丢掉最后一轮** — SessionEnd 曾删除代次标记，仍在运行的后台摘要器误判为「已被取代」而放弃写入，最后一轮的任务和备忘录随之丢失。
 
 ### 2026-09-25
 

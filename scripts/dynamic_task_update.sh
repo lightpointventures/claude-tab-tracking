@@ -89,6 +89,7 @@ for candidate in /usr/bin/python3 /opt/homebrew/bin/python3 /usr/local/bin/pytho
 done
 [ -z "$PYTHON3" ] && PYTHON3=$(command -v python3 2>/dev/null || true)
 [ -z "$PYTHON3" ] && finish_ok
-"$PYTHON3" "$HOME/.claude/scripts/dynamic_task_update.py" "$TRANSCRIPT" "$TASK_FILE" >/dev/null 2>&1 || true
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$PYTHON3" "$SCRIPT_DIR/dynamic_task_update.py" "$TRANSCRIPT" "$TASK_FILE" >/dev/null 2>&1 || true
 
 finish_ok

@@ -1,6 +1,8 @@
 #!/bin/bash
-# claude-tab-tracking installer
-# Copies scripts, registers hooks and statusline in ~/.claude/settings.json
+# claude-tab-tracking manual installer (no marketplace).
+# Copies scripts into ~/.claude/scripts, commands into ~/.claude/commands, and
+# registers hooks + statusline in ~/.claude/settings.json.
+# Preferred install is the plugin marketplace; see README.
 
 set -euo pipefail
 
@@ -40,8 +42,12 @@ mkdir -p "$SCRIPTS_DIR" "$COMMANDS_DIR" "$TASKS_DIR" "$MEMO_DIR"
 # --- Copy scripts ---
 cp "$REPO_DIR/scripts/"*.sh "$SCRIPTS_DIR/"
 cp "$REPO_DIR/scripts/"*.py "$SCRIPTS_DIR/"
-cp "$REPO_DIR/commands/"*.md "$COMMANDS_DIR/"
 chmod +x "$SCRIPTS_DIR/"*.sh "$SCRIPTS_DIR/"*.py
+# Commands reference ${CLAUDE_PLUGIN_ROOT} (substituted only for plugin installs);
+# point them at the copied scripts instead. /tab:setup is plugin-only.
+for cmd in task memo recall; do
+  sed "s|\${CLAUDE_PLUGIN_ROOT}/scripts|$SCRIPTS_DIR|g" "$REPO_DIR/commands/$cmd.md" > "$COMMANDS_DIR/$cmd.md"
+done
 
 echo "Scripts installed to $SCRIPTS_DIR"
 
@@ -71,7 +77,6 @@ hooks = d.setdefault("hooks", {})
 new_hooks = {
     "SessionStart": [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/scripts/session_start.sh", "timeout": 10}]}],
     "Stop":         [{"hooks": [{"type": "command", "command": "~/.claude/scripts/dynamic_task_update.sh", "timeout": 15}]}],
-    "TaskCompleted":[{"hooks": [{"type": "command", "command": "~/.claude/scripts/task_completed.sh", "timeout": 5}]}],
     "SessionEnd":   [{"matcher": "", "hooks": [{"type": "command", "command": "~/.claude/scripts/session_end.sh", "timeout": 5}]}],
 }
 

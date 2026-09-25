@@ -1,0 +1,13 @@
+{
+  "name": "tab",
+  "version": "1.0.0",
+  "description": "Live task tracking and conversation memory for Claude Code: a per-session [WIP]/[DONE] task line for your statusline, plus daily memos with /tab:memo and /tab:recall.",
+  "author": {
+    "name": "Lightpoint Ventures",
+    "url": "https://github.com/lightpointventures"
+  },
+  "homepage": "https://github.com/lightpointventures/claude-tab-tracking",
+  "repository": "https://github.com/lightpointventures/claude-tab-tracking",
+  "license": "MIT",
+  "keywords": ["statusline", "session", "task-tracking", "memory", "memos", "hooks", "claude-code"]
+}

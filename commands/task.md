@@ -7,7 +7,7 @@ Set or update the session task description shown in the statusline.
 When this command is invoked:
 
 1. Determine the task description:
-   - If the user typed something after `/task` (e.g. `/task Fix the Model-A bug`), use that text as the description.
+   - If the user typed something after the command (e.g. `/tab:task Fix the Model-A bug`), use that text as the description.
    - If no text was provided, ask: "What task are you working on in this session?"
 
 2. Find the current session's task file using the cwd-indexed lookup:
@@ -28,5 +28,5 @@ When this command is invoked:
 
 Note on prefixes:
 - `WIP:` = auto-tracked by Stop hook (updates each turn)
-- `DONE:` = task completed (set by Stop hook or TaskCompleted hook)
+- `DONE:` = task completed (detected by the Stop hook)
 - `MANUAL:` = user-set description (Stop hook will NOT auto-update this)

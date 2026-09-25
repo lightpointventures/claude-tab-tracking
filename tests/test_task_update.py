@@ -1434,9 +1434,9 @@ import pytest
 _HAS_JQ = shutil.which('jq') is not None
 
 
-def _run_hook(script, payload, home):
+def _run_hook(script, payload, home, env=None):
     import json
-    env = dict(os.environ, HOME=str(home))
+    env = dict(os.environ, HOME=str(home), **(env or {}))
     return subprocess.run(
         ['bash', os.path.join(SCRIPTS_DIR, script)],
         input=json.dumps(payload), capture_output=True, text=True, timeout=30, env=env,
@@ -1479,25 +1479,6 @@ def test_session_start_memo_overview_counts_entries(tmp_path):
 
 
 @pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
-def test_task_completed_marks_done_and_keeps_prev(tmp_path):
-    tasks = tmp_path / '.claude' / 'session-tasks'
-    tasks.mkdir(parents=True)
-    (tasks / 'sid-4.txt').write_text('WIP:Ship the feature\nPREV:1:old\n')
-    r = _run_hook('task_completed.sh', {'session_id': 'sid-4'}, tmp_path)
-    assert r.returncode == 0, r.stderr
-    assert (tasks / 'sid-4.txt').read_text().splitlines() == ['DONE:Ship the feature', 'PREV:1:old']
-
-
-@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
-def test_task_completed_ignores_empty_placeholder(tmp_path):
-    tasks = tmp_path / '.claude' / 'session-tasks'
-    tasks.mkdir(parents=True)
-    (tasks / 'sid-5.txt').write_text('WIP:\n')
-    _run_hook('task_completed.sh', {'session_id': 'sid-5'}, tmp_path)
-    assert (tasks / 'sid-5.txt').read_text() == 'WIP:\n'
-
-
-@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
 def test_session_end_removes_own_lookup_and_sidecars(tmp_path):
     _run_hook('session_start.sh', {'session_id': 'sid-6', 'cwd': str(tmp_path), 'source': 'startup'}, tmp_path)
     tasks = tmp_path / '.claude' / 'session-tasks'
@@ -1508,7 +1489,7 @@ def test_session_end_removes_own_lookup_and_sidecars(tmp_path):
     lookup.write_text('sid-other\n')
     _run_hook('session_end.sh', {'session_id': 'sid-6', 'cwd': str(tmp_path)}, tmp_path)
     assert lookup.exists()
-    assert not (tasks / 'sid-6.txt.gen').exists()
+    assert (tasks / 'sid-6.txt.gen').exists()  # kept: a helper may still be in flight
     assert not (tasks / 'sid-6.txt.lock').exists()
     lookup.write_text('sid-6\n')
     _run_hook('session_end.sh', {'session_id': 'sid-6', 'cwd': str(tmp_path)}, tmp_path)
@@ -1566,18 +1547,17 @@ def test_stop_hook_wrapper_rotates_done_into_prev(tmp_path):
     tasks = tmp_path / '.claude' / 'session-tasks'
     tasks.mkdir(parents=True)
     (tasks / 'sid-8.txt').write_text('DONE:Finished thing\nPREV:1:before\nPREV:2:way before\nPREV:3:ancient\n')
-    scripts_home = tmp_path / '.claude' / 'scripts'
-    scripts_home.mkdir(parents=True)
-    # The wrapper calls ~/.claude/scripts/dynamic_task_update.py; give it a no-op there
-    (scripts_home / 'dynamic_task_update.py').write_text('import sys; sys.exit(0)\n')
     transcript = tmp_path / 't.jsonl'
     transcript.write_text('{"type":"user","message":{"content":"hello there"}}\n')
     r = _run_hook('dynamic_task_update.sh',
-                  {'session_id': 'sid-8', 'transcript_path': str(transcript), 'stop_hook_active': False}, tmp_path)
+                  {'session_id': 'sid-8', 'transcript_path': str(transcript), 'stop_hook_active': False},
+                  tmp_path, env={'CLAUDE_TAB_BACKEND': 'keyword'})
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == '{"continue":true,"suppressOutput":true}'
+    # DONE rotated into PREV:1, then the keyword backend (run from the script's own
+    # directory, not ~/.claude/scripts) wrote the new WIP line.
     assert (tasks / 'sid-8.txt').read_text().splitlines() == [
-        'WIP:', 'PREV:1:Finished thing', 'PREV:2:before', 'PREV:3:way before']
+        'WIP:hello there', 'PREV:1:Finished thing', 'PREV:2:before', 'PREV:3:way before']
 
 
 @pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
@@ -1594,3 +1574,142 @@ def test_stop_hook_wrapper_respects_manual_and_recursion_guard(tmp_path):
     payload['stop_hook_active'] = True
     r = _run_hook('dynamic_task_update.sh', payload, tmp_path)
     assert r.returncode == 0 and 'continue' in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# Plugin packaging
+# ---------------------------------------------------------------------------
+
+import re
+
+REPO_DIR = os.path.join(os.path.dirname(__file__), '..')
+
+
+def test_plugin_manifests_are_consistent():
+    import json
+    plugin = json.load(open(os.path.join(REPO_DIR, '.claude-plugin', 'plugin.json')))
+    market = json.load(open(os.path.join(REPO_DIR, '.claude-plugin', 'marketplace.json')))
+    assert plugin['name'] == 'tab'  # commands are /tab:task, /tab:memo, ...
+    assert plugin['version'] == market['metadata']['version']
+    entry = market['plugins'][0]
+    assert entry['name'] == 'claude-tab-tracking' and entry['source'] == './'
+    for cmd in ('task', 'memo', 'recall', 'setup'):
+        assert os.path.exists(os.path.join(REPO_DIR, 'commands', f'{cmd}.md'))
+
+
+def test_plugin_hooks_reference_existing_scripts():
+    import json
+    hooks = json.load(open(os.path.join(REPO_DIR, 'hooks', 'hooks.json')))['hooks']
+    assert set(hooks) == {'SessionStart', 'Stop', 'SessionEnd'}  # TaskCompleted = subagent task, not session
+    for event, rules in hooks.items():
+        for rule in rules:
+            for h in rule['hooks']:
+                assert h['type'] == 'command'
+                m = re.search(r'\$\{CLAUDE_PLUGIN_ROOT\}/(scripts/[\w.]+)', h['command'])
+                assert m, h['command']
+                path = os.path.join(REPO_DIR, m.group(1))
+                assert os.path.exists(path) and os.access(path, os.X_OK), path
+
+
+def test_no_hardcoded_home_scripts_path():
+    """Plugin files must locate helpers relative to the plugin, not ~/.claude/scripts."""
+    for name in os.listdir(os.path.join(REPO_DIR, 'scripts')):
+        if not name.endswith(('.sh', '.py')):
+            continue
+        text = open(os.path.join(REPO_DIR, 'scripts', name), encoding='utf-8').read()
+        assert '.claude/scripts/' not in text, name
+    for name in ('task.md', 'memo.md', 'recall.md', 'setup.md'):
+        text = open(os.path.join(REPO_DIR, 'commands', name), encoding='utf-8').read()
+        assert 'python3 ~/.claude/scripts' not in text, name
+
+
+@pytest.mark.skipif(shutil.which('claude') is None, reason='claude CLI not installed')
+def test_claude_plugin_validate_passes():
+    r = subprocess.run(['claude', 'plugin', 'validate', REPO_DIR], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_statusline_segment_mode_prints_only_task_line(tmp_path):
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    tasks.mkdir(parents=True)
+    (tasks / 'sid-10.txt').write_text('WIP:Segment task\nPREV:1:older\n')
+    payload = {'session_id': 'sid-10', 'cwd': '/a/b', 'context_window': {'used_percentage': 10}}
+    env = dict(os.environ, HOME=str(tmp_path))
+    r = subprocess.run(['bash', os.path.join(SCRIPTS_DIR, 'session_statusline.sh'), '--segment'],
+                       input=__import__('json').dumps(payload), capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode == 0
+    lines = r.stdout.splitlines()
+    assert len(lines) == 1 and '[WIP]' in lines[0] and 'Segment task' in lines[0]
+    r = _run_hook('session_statusline.sh', payload, tmp_path, env={'CLAUDE_TAB_SEGMENT': '1'})
+    assert len(r.stdout.splitlines()) == 1
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_session_start_writes_plugin_launcher_and_hint(tmp_path):
+    data_dir = tmp_path / 'plugin-data'
+    r = _run_hook('session_start.sh', {'session_id': 'sid-11', 'cwd': str(tmp_path), 'source': 'startup'},
+                  tmp_path, env={'CLAUDE_PLUGIN_DATA': str(data_dir)})
+    assert r.returncode == 0, r.stderr
+    launcher = data_dir / 'statusline.sh'
+    assert launcher.exists() and os.access(launcher, os.X_OK)
+    assert os.path.join(os.path.abspath(SCRIPTS_DIR), 'session_statusline.sh') in launcher.read_text()
+    assert '/tab:setup' in r.stdout  # no statusLine configured yet
+    # The launcher works end to end
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    (tasks / 'sid-11.txt').write_text('WIP:Via launcher\n')
+    env = dict(os.environ, HOME=str(tmp_path))
+    out = subprocess.run(['bash', str(launcher), '--segment'], input='{"session_id":"sid-11"}',
+                         capture_output=True, text=True, timeout=30, env=env).stdout
+    assert 'Via launcher' in out
+    # Configured statusline: no hint
+    settings = tmp_path / '.claude' / 'settings.json'
+    settings.write_text('{"statusLine":{"type":"command","command":"%s"}}' % launcher)
+    r = _run_hook('session_start.sh', {'session_id': 'sid-12', 'cwd': str(tmp_path), 'source': 'startup'},
+                  tmp_path, env={'CLAUDE_PLUGIN_DATA': str(data_dir)})
+    assert '/tab:setup' not in r.stdout
+
+
+def test_main_keyword_backend_writes_task(tmp_path, monkeypatch):
+    """Regression: main() passes min_turns/tags to every backend; keyword_fallback
+    must accept them or the zero-dependency path silently never writes."""
+    import dynamic_task_update as d
+    transcript = tmp_path / 't.jsonl'
+    transcript.write_text('{"type":"user","message":{"content":"Fix the login bug please"}}\n')
+    task_file = tmp_path / 'task.txt'
+    monkeypatch.setenv('CLAUDE_TAB_BACKEND', 'keyword')
+    monkeypatch.setattr(sys, 'argv', ['x', str(transcript), str(task_file)])
+    monkeypatch.setattr(d, 'ERROR_LOG', str(tmp_path / 'err.log'))
+    d.main()
+    assert task_file.read_text().splitlines()[0] == 'WIP:Fix the login bug please'
+    assert not (tmp_path / 'err.log').exists()
+
+
+def test_cli_background_writes_when_generation_file_missing(tmp_path, monkeypatch):
+    """SessionEnd (or a headless -p run) can remove sidecars before the helper
+    finishes; a missing token must not be treated as superseded, or the last
+    turn's task and memo are dropped."""
+    task_file = tmp_path / 'task.txt'
+    task_file.write_text('INIT:x\n')
+    job_file = _write_job(tmp_path, task_file, generation='tok-1')
+    cli_background = _mock_cli(monkeypatch, stdout='Final result')
+    monkeypatch.setattr(sys, 'argv', ['cli_background.py', str(job_file)])
+    cli_background.main()
+    assert task_file.read_text().splitlines()[0] == 'WIP:Final result'
+
+
+@pytest.mark.skipif(not _HAS_JQ, reason='jq not installed')
+def test_statusline_truncates_cjk_by_character_under_c_locale(tmp_path):
+    tasks = tmp_path / '.claude' / 'session-tasks'
+    tasks.mkdir(parents=True)
+    task = '中' * 70
+    (tasks / 'sid-13.txt').write_text(f'WIP:{task}\n')
+    env = {k: v for k, v in os.environ.items() if k not in ('LANG', 'LC_ALL', 'LC_CTYPE')}
+    env.update(HOME=str(tmp_path), LC_ALL='C')
+    r = subprocess.run(['bash', os.path.join(SCRIPTS_DIR, 'session_statusline.sh'), '--segment'],
+                       input='{"session_id":"sid-13"}', capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode == 0
+    line = r.stdout.splitlines()[0]
+    assert '中' * 57 + '...' in line
+    assert '中' * 58 not in line
+    assert '\ufffd' not in line  # no broken multibyte sequence

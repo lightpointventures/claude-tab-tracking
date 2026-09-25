@@ -23,20 +23,21 @@ If you run multiple Claude Code sessions simultaneously, this tells you at a gla
 - `[---]` — session just started, showing directory and git branch
 - `[WIP]` — task in progress, auto-updated each turn
 - `[DONE]` — task completed (detected automatically)
-- `[SET]` — task manually set with `/task`
+- `[SET]` — task manually set with `/tab:task`
 
 When you finish one task and start another, the previous tasks stay visible as dimmed `[DONE]` lines beneath the current task (up to 2 previous tasks displayed, 3 stored).
 
 ## How it works
 
-Four Claude Code hooks work together:
+Three Claude Code hooks work together:
 
 | Hook | What it does |
 |------|-------------|
-| `SessionStart` | Writes `dir [branch]` as initial task label |
-| `Stop` | After each assistant response: reads transcript, updates task description, detects completion |
-| `TaskCompleted` | Marks task as `[DONE]` when Claude explicitly completes a task |
+| `SessionStart` | Writes `dir [branch]` as the initial label (kept on resume/compact); refreshes the statusline launcher |
+| `Stop` | After each assistant response: reads the transcript, updates the task description, detects completion |
 | `SessionEnd` | Cleans up session state files |
+
+Completion is detected from the conversation itself (the summarizer marks a task `[完成]`/done), not from Claude Code's `TaskCompleted` event, which fires for individual background tasks rather than the session.
 
 The statusline script reads the task file for the current session and renders the display.
 
@@ -78,12 +79,12 @@ When set to a specific backend, no fallback is attempted — if that backend fai
 
 ### Token Budget
 
-Control how much context `/recall` injects and how memo entries are deduplicated.
+Control how much context `/tab:recall` injects and how memo entries are deduplicated.
 
 Add to `~/.claude/memos/config.yaml`:
 
 ```yaml
-# Max tokens loaded per /recall invocation (default: 8000, 0 = unlimited)
+# Max tokens loaded per /tab:recall invocation (default: 8000, 0 = unlimited)
 recall_token_budget: 8000
 
 # Merge similar memo entries within this window in seconds (default: 300, 0 = disabled)
@@ -98,23 +99,51 @@ memo_merge_threshold: 0.6
 - **Summary**: file exceeds budget → only headers + conclusions loaded
 - **Truncated**: summary exceeds budget → most recent entries loaded up to budget
 
-Override per-invocation: `/recall --budget 4000` or `/recall --full` (no limit).
+Override per-invocation: `/tab:recall --budget 4000` or `/tab:recall --full` (no limit).
 
 ## Install
 
-Requires [jq](https://jqlang.github.io/jq/):
-```bash
-brew install jq  # macOS
-apt install jq   # Debian/Ubuntu
+Requires [jq](https://jqlang.github.io/jq/) (`brew install jq` on macOS, `apt install jq` on Debian/Ubuntu) and Python 3 (preinstalled on macOS and most Linux).
+
+### From the plugin marketplace (recommended)
+
+Inside Claude Code:
+
+```
+/plugin marketplace add lightpointventures/claude-tab-tracking
+/plugin install claude-tab-tracking@claude-tab-tracking
+/tab:setup
 ```
 
-Then:
+Or from your shell:
+
+```bash
+claude plugin marketplace add lightpointventures/claude-tab-tracking
+claude plugin install claude-tab-tracking@claude-tab-tracking
+```
+
+then run `/tab:setup` once inside Claude Code. Plugins cannot change the `statusLine` setting themselves, so that command writes it for you (with a backup of `settings.json`). Task tracking and memos are active as soon as the plugin is installed; `/tab:setup` only controls what you see.
+
+Updates: bump-free. The statusline entry points at a launcher in the plugin's data directory that always resolves to the installed version, so `claude plugin update claude-tab-tracking` needs no re-setup.
+
+### Embed in another statusline
+
+Already using [ccstatusline](https://github.com/sirmalloc/ccstatusline), [claude-powerline](https://github.com/Owloops/claude-powerline) or [claude-hud](https://github.com/jarrodwatts/claude-hud)? Keep it. The launcher has a `--segment` mode that prints only the `[WIP] …` line, so you can add it as a custom command segment:
+
+```bash
+~/.claude/plugins/data/claude-tab-tracking-claude-tab-tracking/statusline.sh --segment
+```
+
+`/tab:setup` detects an existing statusline and shows this path for you.
+
+### Manual install (no marketplace)
+
 ```bash
 git clone https://github.com/lightpointventures/claude-tab-tracking.git
 cd claude-tab-tracking && ./install.sh
 ```
 
-Open a new Claude Code session — the statusline appears immediately.
+This copies the scripts into `~/.claude/scripts/`, registers the hooks and statusline in `~/.claude/settings.json`, and installs the commands as `/task`, `/memo` and `/recall` (no `tab:` prefix). Do not combine it with the plugin install; `/tab:setup` offers to remove a manual install it finds.
 
 ## Conversation memory
 
@@ -133,86 +162,88 @@ Memos are saved to `~/.claude/memos/{project}/{YYYY-MM-DD}.md`, organized by pro
 
 ### Recalling past context
 
-Use `/recall` to load memos from previous sessions:
+Use `/tab:recall` to load memos from previous sessions:
 
 ```
-/recall              # list recent projects, pick one interactively
-/recall my-project   # skip to date selection for a specific project
-/recall 3-20         # load all memos from that date
+/tab:recall              # list recent projects, pick one interactively
+/tab:recall my-project   # skip to date selection for a specific project
+/tab:recall 3-20         # load all memos from that date
 ```
 
 On session start, the plugin shows a hint if memos exist:
 ```
 [memo] Recent projects: my-app (today, 3 entries) | api-server (3-20, 5 entries)
-Type /recall for details
+Type /tab:recall for details
 ```
 
 ### Viewing memos
 
-Use `/memo` to browse memos without loading them into context:
+Use `/tab:memo` to browse memos without loading them into context:
 
 ```
-/memo                # show today's memos
-/memo 3-20           # show memos from a specific date
-/memo my-project     # list recent memo files for a project
-/memo keyword        # search across all memos
+/tab:memo                # show today's memos
+/tab:memo 3-20           # show memos from a specific date
+/tab:memo my-project     # list recent memo files for a project
+/tab:memo search JWT     # full-text search across all memos
 ```
 
 ## Manual task override
 
-Use the `/task` slash command to set a custom description for the current session:
+Use `/tab:task` to set a custom description for the current session:
 
 ```
-/task Reviewing Q1 strategy report
+/tab:task Reviewing Q1 strategy report
 ```
 
 This writes a `MANUAL:` prefix that pins the description and stops auto-updates for this session. The badge shows `[SET]`.
 
-## Files installed
+## Files
 
-| File | Purpose |
+Plugin layout (marketplace install):
+
+| Path | Purpose |
 |------|---------|
-| `~/.claude/scripts/session_start.sh` | SessionStart hook |
-| `~/.claude/scripts/dynamic_task_update.sh` | Stop hook (bash wrapper) |
-| `~/.claude/scripts/dynamic_task_update.py` | Stop hook (transcript parser + LLM summarization) |
-| `~/.claude/scripts/cli_background.py` | Background helper for Claude Code CLI backend |
-| `~/.claude/scripts/claude_cli_common.py` | Shared `claude -p` invocation helpers |
-| `~/.claude/scripts/memo_search.py` | Full-text memo search (`/memo search`) |
-| `~/.claude/scripts/task_completed.sh` | TaskCompleted hook |
-| `~/.claude/scripts/session_statusline.sh` | Statusline renderer |
-| `~/.claude/scripts/session_end.sh` | SessionEnd cleanup |
-| `~/.claude/commands/task.md` | `/task` slash command |
-| `~/.claude/commands/memo.md` | `/memo` slash command |
-| `~/.claude/commands/recall.md` | `/recall` slash command |
-| `~/.claude/session-tasks/` | Session state (auto-cleaned after 7 days) |
+| `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` | Plugin and marketplace manifests |
+| `hooks/hooks.json` | Registers the SessionStart / Stop / SessionEnd hooks |
+| `commands/setup.md` | `/tab:setup`: writes the statusline entry |
+| `commands/task.md`, `memo.md`, `recall.md` | `/tab:task`, `/tab:memo`, `/tab:recall` |
+| `scripts/session_start.sh` | SessionStart hook; also writes the statusline launcher |
+| `scripts/dynamic_task_update.sh` + `.py` | Stop hook: transcript parsing + summarization backends |
+| `scripts/cli_background.py`, `claude_cli_common.py` | Background helper for the Claude Code CLI backend |
+| `scripts/session_statusline.sh` | Statusline renderer (`--segment` for embedding) |
+| `scripts/session_end.sh` | SessionEnd cleanup |
+| `scripts/memo_search.py` | Full-text memo search |
+
+Data written on your machine (identical for both install methods):
+
+| Path | Purpose |
+|------|---------|
+| `~/.claude/session-tasks/` | Per-session task state (auto-cleaned after 7 days) |
 | `~/.claude/session-tasks/_errors.log` | Backend failures, if any (hooks themselves never fail) |
 | `~/.claude/memos/` | Conversation memos (organized by project/date) |
+| `~/.claude/plugins/data/claude-tab-tracking-claude-tab-tracking/statusline.sh` | Stable statusline launcher (plugin install only) |
 
 ## Uninstall
 
-```bash
-rm -f ~/.claude/scripts/session_start.sh \
-      ~/.claude/scripts/dynamic_task_update.sh \
-      ~/.claude/scripts/dynamic_task_update.py \
-      ~/.claude/scripts/cli_background.py \
-      ~/.claude/scripts/claude_cli_common.py \
-      ~/.claude/scripts/memo_search.py \
-      ~/.claude/scripts/task_completed.sh \
-      ~/.claude/scripts/session_statusline.sh \
-      ~/.claude/scripts/session_end.sh \
-      ~/.claude/commands/task.md \
-      ~/.claude/commands/memo.md \
-      ~/.claude/commands/recall.md
-rm -rf ~/.claude/session-tasks/
-rm -rf ~/.claude/memos/
+Plugin install:
+
+```
+/plugin uninstall claude-tab-tracking@claude-tab-tracking
 ```
 
-Or use the uninstall script:
-```bash
-cd claude-tab-tracking && ./uninstall.sh
-```
+then remove the `statusLine` key from `~/.claude/settings.json` if you set it with `/tab:setup`. Memos and session state under `~/.claude/` are left in place.
+
+Manual install: `./uninstall.sh` (removes the hooks, scripts and commands; keeps your data).
 
 ## Changelog
+
+### 1.0.0 — 2026-09-25
+
+- **New: official plugin format** — Install with `/plugin marketplace add lightpointventures/claude-tab-tracking` and `/plugin install claude-tab-tracking@claude-tab-tracking`. Hooks register through `hooks/hooks.json`; commands are `/tab:task`, `/tab:memo`, `/tab:recall`, plus the new `/tab:setup`.
+- **New: `/tab:setup`** — Writes the `statusLine` entry (plugins cannot), pointing at a launcher in the plugin data directory that survives updates. Detects a manual (pre-plugin) install and offers to remove it so hooks do not run twice.
+- **New: `--segment` mode** — The statusline prints only the task line, for embedding in ccstatusline, claude-powerline or claude-hud.
+- **Removed: `TaskCompleted` hook** — In current Claude Code this event fires when a background task/subagent completes, not when the session's work is done; it was flipping sessions to `[DONE]` prematurely. Completion now comes only from the summarizer.
+- **Fix: keyword backend never ran from the main path** — `keyword_fallback()` rejected the arguments the backend loop passes to every backend, so `CLAUDE_TAB_BACKEND=keyword` (and the final fallback in auto mode) silently did nothing.
 
 ### 2026-09-25
 

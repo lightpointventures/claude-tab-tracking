@@ -28,9 +28,13 @@ if [ -f "$LOOKUP" ] && [ "$(cat "$LOOKUP")" = "$SESSION_ID" ]; then
   rm -f "$LOOKUP"
 fi
 
-# Sidecar files are only useful while the session is live
+# The lock file is only useful while the session is live. The generation
+# token (.txt.gen) is deliberately kept: a background summarizer for the last
+# turn may still be running, and it must not mistake a missing token for
+# "superseded" (it would drop the final task update and memo). The 7-day sweep
+# in session_start.sh removes stale tokens.
 if [ -n "$SESSION_ID" ]; then
-  rm -f "$TASKS_DIR/${SESSION_ID}.txt.lock" "$TASKS_DIR/${SESSION_ID}.txt.gen"
+  rm -f "$TASKS_DIR/${SESSION_ID}.txt.lock"
 fi
 
 exit 0

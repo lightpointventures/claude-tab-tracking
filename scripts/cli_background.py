@@ -77,7 +77,8 @@ def _run_claude(prompt):
 
 def _superseded(task_file, generation):
     """True if a newer helper was launched for this task file, or the user pinned it."""
-    if generation and read_generation(task_file) != generation:
+    current = read_generation(task_file) if generation else ''
+    if generation and current and current != generation:
         return True
     try:
         with open(task_file, 'r', encoding='utf-8') as f:

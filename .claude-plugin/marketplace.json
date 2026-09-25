@@ -1,0 +1,20 @@
+{
+  "name": "claude-tab-tracking",
+  "owner": {
+    "name": "Lightpoint Ventures",
+    "url": "https://github.com/lightpointventures"
+  },
+  "metadata": {
+    "description": "Live task tracking and conversation memory for Claude Code sessions",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "claude-tab-tracking",
+      "source": "./",
+      "description": "Shows what each Claude Code session is working on, right in the statusline, and saves decisions/TODOs from every conversation as daily memos you can search and recall.",
+      "category": "productivity",
+      "tags": ["statusline", "session", "task-tracking", "memory", "memos"]
+    }
+  ]
+}
